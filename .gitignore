@@ -1,0 +1,50 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C++ Build & artifacts
+build/
+bin/
+cmake-build-*/
+*.o
+*.a
+*.so
+*.dylib
+CMakeCache.txt
+CMakeFiles/
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Model Weights and Large Store Artifacts (PoUW store)
+store/*
+!store/.gitkeep
+*.safetensors
+*.pt
+*.pth
+*.onnx
+
+# Datasets
+data/
+datasets/
+*.tar.gz
+*.gz
+
+# Experiment Results & Raw Dumps
+experiments/runs/
+experiments/checkpoints/
+
+# IDE & OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
+
+# AI agent local cache
+.gemini/
+.claude/
