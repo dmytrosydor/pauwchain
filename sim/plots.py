@@ -19,8 +19,9 @@ from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
 
 INK, INK2, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 BLUE, ORANGE = "#2a78d6", "#eb6834"
-SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]
-MARKERS = ["o", "s", "^", "D", "v"]
+SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6"]
+MARKERS = ["o", "s", "^", "D", "v", "P", "X"]
+LINESTYLES = ["-", "--", "-.", ":", "-", "--", "-."]
 SEQ = LinearSegmentedColormap.from_list("seq_blue", ["#f4f8fd", "#86b6ef", "#2a78d6", "#0d366b"])
 
 plt.rcParams.update({
@@ -59,12 +60,13 @@ def accuracy(run_dir: str) -> str:
 def matrix(run_dir: str) -> str:
     with open(os.path.join(run_dir, "matrix.csv")) as f:
         rows = list(csv.DictReader(f))
-    kinds = list(dict.fromkeys(r["kind"] for r in rows))
+    col = "attack" if "attack" in rows[0] else "kind"
+    kinds = list(dict.fromkeys(r[col] for r in rows))
     mechs = list(dict.fromkeys(r["mechanism"] for r in rows))
     rej, n = defaultdict(int), defaultdict(int)
     for r in rows:
-        rej[r["kind"], r["mechanism"]] += int(r["rejected"])
-        n[r["kind"], r["mechanism"]] += 1
+        rej[r[col], r["mechanism"]] += int(r["rejected"])
+        n[r[col], r["mechanism"]] += 1
     grid = [[rej[k, m] / n[k, m] for m in mechs] for k in kinds]
 
     fig, ax = plt.subplots(figsize=(1.1 * len(mechs) + 2.2, 0.45 * len(kinds) + 1.2))
@@ -108,7 +110,7 @@ def e1(run_dir: str) -> str:
         ax.set_xlabel("‖W_перерах − W_заявл‖ / ‖ΔW‖")
         ax.grid(axis="y", visible=False)
     axes[0].set_yticks(range(len(kinds)), kinds)
-    axes[0].legend(title="валідатор", frameon=False, loc="lower right", fontsize=8, title_fontsize=8)
+    axes[0].legend(title="валідатор", frameon=False, loc="upper left", fontsize=8, title_fontsize=8)
     fig.text(0.01, 0.01, f"значення 0 (побітовий збіг) показано як {floor:g}", color=INK2, fontsize=8)
     fig.tight_layout(rect=(0, 0.04, 1, 1))
     out = os.path.join(run_dir, "ratio_by_kind.png")
@@ -125,18 +127,16 @@ def e3(run_dir: str) -> str:
     for metric, label, fname in (("final_accuracy", "точність після 10 раундів", "e3_accuracy.png"),
                                  ("attacker_win_share", "частка раундів, виграних атакувальниками",
                                   "e3_wins.png")):
-        fig, ax = plt.subplots(figsize=(6, 3.6))
+        fig, ax = plt.subplots(figsize=(7.5, 3.6))
         for i, sc in enumerate(scenarios):
             pts = sorted((float(r["fraction"]), float(r[metric])) for r in rows if r["scenario"] == sc)
             xs, ys = [p[0] * 100 for p in pts], [p[1] for p in pts]
-            ax.plot(xs, ys, color=SERIES[i % 5], lw=2, marker=MARKERS[i % 5], ms=5, label=sc)
-            ax.annotate(sc, (xs[-1], ys[-1]), xytext=(6, 0), textcoords="offset points",
-                        color=INK2, fontsize=8, va="center")
+            ax.plot(xs, ys, color=SERIES[i % 7], lw=2, ls=LINESTYLES[i % 7], marker=MARKERS[i % 7], ms=5,
+                    label=sc)
         ax.set_xlabel("частка зловмисних вузлів, %")
         ax.set_ylabel(label)
         ax.set_ylim(-0.03, 1.03)
-        ax.set_xlim(right=max(float(r["fraction"]) for r in rows) * 100 * 1.45)
-        ax.legend(frameon=False, fontsize=8, loc="center left")
+        ax.legend(frameon=False, fontsize=8, loc="center left", bbox_to_anchor=(1.01, 0.5))
         fig.tight_layout()
         out = os.path.join(run_dir, fname)
         fig.savefig(out)
@@ -144,6 +144,57 @@ def e3(run_dir: str) -> str:
     return ", ".join(outs)
 
 
+def pareto(run_dir: str) -> str:
+    """Механізм як точка: середня частка виявлених атак проти вартості перевірки (частка від K)."""
+    with open(os.path.join(run_dir, "matrix.csv")) as f:
+        rows = list(csv.DictReader(f))
+    mechs = list(dict.fromkeys(r["mechanism"] for r in rows))
+    fig, ax = plt.subplots(figsize=(6, 3.8))
+    for i, m in enumerate(mechs):
+        mr = [r for r in rows if r["mechanism"] == m]
+        att = [int(r["rejected"]) for r in mr if r["kind"] != "honest"]
+        frr = [int(r["rejected"]) for r in mr if r["kind"] == "honest"]
+        cost = sum(float(r["verify_steps"]) / float(r["K"]) for r in mr) / len(mr)
+        det = sum(att) / len(att)
+        ax.scatter([cost], [det], s=60, color=SERIES[i % 6], marker=MARKERS[i % 6], zorder=3)
+        ax.annotate(f"{m}  (FRR {sum(frr) / len(frr):.2f})", (cost, det), xytext=(7, [-12, 8, -12, 8, -12, -16][i % 6]),
+                    textcoords="offset points", color=INK, fontsize=9)
+    ax.set_xscale("log")
+    ax.set_xlabel("вартість перевірки, частка від K (лог. шкала)")
+    ax.set_ylabel("середня частка виявлених атак")
+    ax.set_ylim(0, 1.05)
+    fig.tight_layout()
+    out = os.path.join(run_dir, "pareto.png")
+    fig.savefig(out)
+    return out
+
+
+def e5(run_dir: str) -> str:
+    """Точність спільної моделі за раундами для кожного α і механізму; пунктир — мережа без атакувальників."""
+    with open(os.path.join(run_dir, "rounds.csv")) as f:
+        rows = list(csv.DictReader(f))
+    groups = list(dict.fromkeys((r["mechanism"], r["alpha"]) for r in rows))
+    mechs = [m for m in dict.fromkeys(g[0] for g in groups) if m != "none"]
+    fig, axes = plt.subplots(1, len(mechs), figsize=(4.2 * len(mechs), 3.6), sharey=True)
+    axes = axes if len(mechs) > 1 else [axes]
+    base = [float(r["accuracy"]) for r in rows if r["mechanism"] == "none"]
+    for ax, m in zip(axes, mechs):
+        if base:
+            ax.plot(range(1, len(base) + 1), base, color=INK2, lw=1.5, ls="--", label="без атак")
+        for i, (gm, a) in enumerate(g for g in groups if g[0] == m):
+            ys = [float(r["accuracy"]) for r in rows if r["mechanism"] == gm and r["alpha"] == a]
+            ax.plot(range(1, len(ys) + 1), ys, color=SERIES[i % 5], lw=2, marker=MARKERS[i % 5], ms=3,
+                    label=f"α = {float(a):g}")
+        ax.set_title(f"механізм {m}", color=INK, fontsize=10)
+        ax.set_xlabel("раунд")
+        ax.legend(frameon=False, fontsize=8)
+    axes[0].set_ylabel("точність (тестова половина)")
+    fig.tight_layout()
+    out = os.path.join(run_dir, "e5_accuracy.png")
+    fig.savefig(out)
+    return out
+
+
 if __name__ == "__main__":
     kind, path = sys.argv[1], sys.argv[2]
-    print({"accuracy": accuracy, "matrix": matrix, "e1": e1, "e3": e3}[kind](path))
+    print({"accuracy": accuracy, "matrix": matrix, "e1": e1, "e3": e3, "pareto": pareto, "e5": e5}[kind](path))
