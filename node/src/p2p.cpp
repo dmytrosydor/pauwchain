@@ -18,7 +18,7 @@ namespace pouw {
 
 namespace {
 
-constexpr uint32_t kMaxFrame = 64u << 20;
+constexpr uint32_t kMaxFrame = 8u << 20;  // ~4000 блоків у відповіді на синхронізацію; більше — від зловмисного піра
 
 bool write_all(int fd, const void* data, size_t len) {
   auto* p = static_cast<const uint8_t*>(data);

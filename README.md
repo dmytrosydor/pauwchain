@@ -67,6 +67,19 @@ HEIGHT=8 LAZY=0 scripts/demo.sh        # лише сумлінні вузли
 
 Результати вузла — у `--run-dir`: `chain.json`, `status.json` і файли завдань воркера.
 
+## Тести
+
+```sh
+.venv/bin/python -m pytest -q worker/tests sim/tests   # Python: контракт, детермінізм, механізми, атаки
+ctest --test-dir build                                 # C++: ті самі вектори, правила блоку, вибір гілки
+.venv/bin/ruff check .
+python scripts/gen_vectors.py                          # лише якщо змінився контракт
+```
+
+`docs/vectors.json` — спільні для Python і C++ вектори: байти й хеш заголовка (зокрема граничні значення),
+`ckpt_root`, seed блоку, канонічний хеш ваг (−0, NaN, денормалізовані числа, порядок тензорів).
+CI (`.github/workflows/ci.yml`): лінтер і pytest на Linux, збірка й CTest на Linux і macOS, CTest з ASan/UBSan.
+
 ## Структура
 
 ```

@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <random>
 #include <string>
 
 #include "block.hpp"
@@ -69,6 +70,61 @@ static void test_golden(const std::string& path) {
   CHECK(h.serialize().size() == kHeaderSize);
   CHECK(to_hex(h.hash()) == g.at("block_hash").get<std::string>());
   CHECK(header_to_json(h) == g.at("header"));
+}
+
+// Спільні з Python вектори (scripts/gen_vectors.py): байти заголовка, хеш блоку, ckpt_root.
+static void test_vectors(const std::string& path) {
+  std::ifstream in(path);
+  CHECK(static_cast<bool>(in));
+  if (!in) return;
+  json v = json::parse(in);
+  for (const auto& c : v.at("headers")) {
+    Header h = header_from_json(c.at("header"));
+    auto raw = h.serialize();
+    CHECK(to_hex(raw) == c.at("bytes_hex").get<std::string>());
+    CHECK(to_hex(h.hash()) == c.at("block_hash").get<std::string>());
+  }
+  for (const auto& c : v.at("ckpt_roots")) {
+    std::vector<Hash> hs;
+    for (const auto& x : c.at("hashes")) hs.push_back(hash_from_hex(x.get<std::string>()));
+    CHECK(to_hex(ckpt_root_of(hs)) == c.at("root").get<std::string>());
+  }
+}
+
+// Вершина не залежить від порядку, у якому вузол отримав блоки дерева.
+static void test_chain_order_independent() {
+  Task t = test_task();
+  Block g = make_genesis(t, h_of(0x33));
+  std::vector<Block> blocks;
+  std::vector<Block> layer{g};
+  uint8_t salt = 0x40;
+  for (int depth = 0; depth < 3; ++depth) {
+    std::vector<Block> next;
+    for (const auto& parent : layer)
+      for (int i = 0; i < 2; ++i) {
+        next.push_back(child_of(parent, salt));
+        salt = static_cast<uint8_t>(salt + 7);
+      }
+    blocks.insert(blocks.end(), next.begin(), next.end());
+    layer = next;
+  }
+  Chain ref(g);
+  for (const auto& b : blocks) ref.add(b);
+  std::mt19937 rng(7);
+  for (int trial = 0; trial < 50; ++trial) {
+    std::vector<Block> shuffled = blocks;
+    std::shuffle(shuffled.begin(), shuffled.end(), rng);
+    Chain c(g);
+    // Блок із невідомим батьком Chain не приймає (виняток); вузол дотягує батька і доставляє повторно.
+    for (int pass = 0; pass < 4; ++pass)
+      for (const auto& b : shuffled) {
+        try {
+          c.add(b);
+        } catch (const std::invalid_argument&) {
+        }
+      }
+    CHECK(c.tip().hash() == ref.tip().hash());
+  }
 }
 
 static void test_structure() {
@@ -140,8 +196,10 @@ static void test_chain() {
 int main(int argc, char** argv) {
   test_hex();
   test_golden(argc > 1 ? argv[1] : "docs/golden.json");
+  test_vectors(argc > 2 ? argv[2] : "docs/vectors.json");
   test_structure();
   test_chain();
+  test_chain_order_independent();
   if (g_failed) {
     std::cerr << g_failed << " check(s) failed\n";
     return 1;

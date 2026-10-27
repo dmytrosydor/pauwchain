@@ -44,4 +44,5 @@ enable_testing()
 add_executable(node_tests node/tests/test_main.cpp)
 target_link_libraries(node_tests PRIVATE pouw)
 target_compile_options(node_tests PRIVATE -Wall -Wextra -Wpedantic)
-add_test(NAME node_tests COMMAND node_tests ${CMAKE_SOURCE_DIR}/docs/golden.json)
+add_test(NAME node_tests COMMAND node_tests ${CMAKE_SOURCE_DIR}/docs/golden.json
+         ${CMAKE_SOURCE_DIR}/docs/vectors.json)
