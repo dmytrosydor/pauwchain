@@ -43,6 +43,7 @@ class Config:
     seed: int = 0
     miner_devices: List[str] = field(default_factory=lambda: ["cpu"])
     validator_devices: List[str] = field(default_factory=lambda: ["cpu"])
+    max_validators: int = 0  # 0 — перевіряють усі сумлінні вузли
     baseline: bool = True
     out_dir: str = "experiments/runs"
 
@@ -66,9 +67,11 @@ def simulate(cfg: Config) -> Dict:
     rng = random.Random(cfg.seed)
     nodes = [{"id": i, "kind": "honest", "params": {}} for i in range(cfg.n_honest)]
     for j, a in enumerate(cfg.attackers):
-        params = {k: v for k, v in a.items() if k != "kind"}
-        nodes.append({"id": cfg.n_honest + j, "kind": a["kind"], "params": params})
+        params = {k: v for k, v in a.items() if k not in ("kind", "speed")}
+        nodes.append({"id": cfg.n_honest + j, "kind": a["kind"], "params": params,
+                      "speed": a.get("speed", 1.0)})
     for n in nodes:
+        n.setdefault("speed", 1.0)
         n["miner"] = miner_id(n["id"])
         n["device"] = cfg.miner_devices[n["id"] % len(cfg.miner_devices)]
     validators = [n for n in nodes if n["kind"] == "honest"]
@@ -83,7 +86,8 @@ def simulate(cfg: Config) -> Dict:
     t0 = time.perf_counter()
 
     for r in range(cfg.rounds):
-        order = sorted(nodes, key=lambda n: (arrival(n["kind"], cfg, n["params"]), rng.random()))
+        # Швидше залізо (speed > 1) подає ту саму роботу раніше.
+        order = sorted(nodes, key=lambda n: (arrival(n["kind"], cfg, n["params"]) / n["speed"], rng.random()))
         # Усі майнери працюють паралельно; їхня робота витрачена, навіть якщо блок програв.
         totals["miner_steps"] += sum(arrival(n["kind"], cfg, n["params"]) if n["kind"] != "plagiarism" else 0
                                      for n in nodes)
@@ -105,9 +109,10 @@ def simulate(cfg: Config) -> Dict:
         for n in order:
             blk = block_of(n)
             verdicts = []
-            for v in validators:
-                if v["id"] == n["id"]:
-                    continue
+            pool = [v for v in validators if v["id"] != n["id"]]
+            if cfg.max_validators and len(pool) > cfg.max_validators:
+                pool = rng.sample(pool, cfg.max_validators)
+            for v in pool:
                 vtask = task_for(cfg.validator_devices[v["id"] % len(cfg.validator_devices)])
                 vrng = random.Random(f"{cfg.seed}/{r}/{v['id']}/{n['id']}")
                 verdicts.append(run(cfg.mechanism, vtask, blk, tip, vrng, **cfg.mech_params))
