@@ -18,12 +18,12 @@ from dataclasses import dataclass, field
 from typing import Dict, List
 
 from sim import attacks
-from sim.core import Block, Task, block_seed, miner_id
+from sim.core import TASK_ID, Block, Task, block_seed, miner_id
 from sim.mechanisms import run
 from worker.canonical import canonical_weight_hash
-from worker.data import load_dataset
+from worker.data import load_dataset, test_set, val_set
 from worker.model import init_state
-from worker.train import accuracy, train_steps
+from worker.train import accuracy, to_micro, train_steps
 
 
 @dataclass
@@ -44,6 +44,8 @@ class Config:
     miner_devices: List[str] = field(default_factory=lambda: ["cpu"])
     validator_devices: List[str] = field(default_factory=lambda: ["cpu"])
     max_validators: int = 0  # 0 — перевіряють усі сумлінні вузли
+    commit_reveal: bool = True  # для C: плагіатор не бачить чужих результатів до свого зобов'язання
+    verify_all: bool = True  # перевіряти й блоки після переможця (лише для статистики виявлення)
     baseline: bool = True
     out_dir: str = "experiments/runs"
 
@@ -59,6 +61,8 @@ def arrival(kind: str, cfg: Config, params: Dict) -> float:
         "poison": cfg.K,
         "spoof_tiny": m,
         "spoof_tolerance": 2 * cfg.K,
+        "one_jump": cfg.K,
+        "metric_lie": 0,
     }[kind]
 
 
@@ -82,7 +86,7 @@ def simulate(cfg: Config) -> Dict:
     tip, prev_hash = init_state(cfg.task_seed), bytes(32)
     round_rows, cand_rows = [], []
     totals = {"miner_steps": 0.0, "verify_steps": 0.0, "useful_steps": 0.0}
-    acc0 = accuracy(tip, ds.x_test, ds.y_test)
+    acc0 = accuracy(tip, *test_set(ds))
     t0 = time.perf_counter()
 
     for r in range(cfg.rounds):
@@ -92,21 +96,30 @@ def simulate(cfg: Config) -> Dict:
         totals["miner_steps"] += sum(arrival(n["kind"], cfg, n["params"]) if n["kind"] != "plagiarism" else 0
                                      for n in nodes)
         cache: Dict[int, Block] = {}
+        replication = "C" in cfg.mechanism.split("+")
+        tip_metric = to_micro(accuracy(tip, *val_set(ds)))
+        params = {**cfg.mech_params, "A": {"prev_metric_micro": tip_metric, **cfg.mech_params.get("A", {})}}
 
         def block_of(n) -> Block:
             if n["id"] not in cache:
-                seed = block_seed(prev_hash, n["miner"], r)
+                # Для C усі виконують те саме завдання з seed завдання (Р8), інакше seed прив'язаний до майнера (Р2).
+                seed = block_seed(prev_hash, TASK_ID if replication else n["miner"], r)
                 task = task_for(n["device"])
-                victim = None
-                if n["kind"] == "plagiarism":
+                kind, victim = n["kind"], None
+                if kind == "plagiarism" and replication and cfg.commit_reveal:
+                    kind = "lazy"  # до розкриття копіювати нічого
+                elif kind == "plagiarism":
                     first_honest = next(x for x in order if x["kind"] == "honest")
                     victim = block_of(first_honest)
-                cache[n["id"]] = attacks.make(n["kind"], task, tip, n["miner"], seed,
-                                              victim=victim, **n["params"])
+                blk = attacks.make(kind, task, tip, n["miner"], seed, victim=victim, **n["params"])
+                blk.kind = n["kind"]
+                cache[n["id"]] = blk
             return cache[n["id"]]
 
         winner = None
         for n in order:
+            if winner and not cfg.verify_all:
+                break
             blk = block_of(n)
             verdicts = []
             pool = [v for v in validators if v["id"] != n["id"]]
@@ -115,16 +128,18 @@ def simulate(cfg: Config) -> Dict:
             for v in pool:
                 vtask = task_for(cfg.validator_devices[v["id"] % len(cfg.validator_devices)])
                 vrng = random.Random(f"{cfg.seed}/{r}/{v['id']}/{n['id']}")
-                verdicts.append(run(cfg.mechanism, vtask, blk, tip, vrng, **cfg.mech_params))
+                verdicts.append(run(cfg.mechanism, vtask, blk, tip, vrng, params))
             rejected = any(x.rejected for x in verdicts)
             vsteps = sum(x.cost_steps for x in verdicts)
-            totals["verify_steps"] += vsteps
+            if not winner:
+                # Після переможця блоки цієї висоти застарілі: у мережі їх ніхто не перевіряв би.
+                totals["verify_steps"] += vsteps
             cand_rows.append({"round": r, "node": n["id"], "kind": n["kind"], "rejected": int(rejected),
+                              "after_winner": int(winner is not None),
                               "validators": len(verdicts), "verify_steps": vsteps,
                               "verify_s": round(sum(x.seconds for x in verdicts), 3)})
-            if not rejected:
+            if not rejected and not winner:
                 winner = (n, blk)
-                break
 
         if winner:
             n, blk = winner
@@ -132,7 +147,7 @@ def simulate(cfg: Config) -> Dict:
             if n["kind"] == "honest":
                 totals["useful_steps"] += cfg.K
             prev_hash = hashlib.sha256(prev_hash + canonical_weight_hash(tip) + n["miner"]).digest()
-        acc = accuracy(tip, ds.x_test, ds.y_test)
+        acc = accuracy(tip, *test_set(ds))
         round_rows.append({"round": r, "winner": winner[0]["id"] if winner else -1,
                            "winner_kind": winner[0]["kind"] if winner else "none",
                            "accuracy": round(acc, 4), "elapsed_s": round(time.perf_counter() - t0, 1)})
@@ -148,7 +163,7 @@ def centralized(cfg: Config, ds) -> List[float]:
     state, out = init_state(cfg.task_seed), []
     for r in range(cfg.rounds):
         state, _ = train_steps(state, ds, cfg.task_seed, r * cfg.K, cfg.K, cfg.batch_size, cfg.lr)
-        out.append(round(accuracy(state, ds.x_test, ds.y_test), 4))
+        out.append(round(accuracy(state, *test_set(ds)), 4))
     return out
 
 

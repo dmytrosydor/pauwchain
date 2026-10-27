@@ -32,6 +32,18 @@ def dataset_hash(ds: Dataset) -> bytes:
     return h.digest()
 
 
+def val_set(ds: Dataset):
+    """Перша половина тестового набору: на ній майнер заявляє метрику, а механізм A її перевіряє."""
+    n = ds.x_test.shape[0] // 2
+    return ds.x_test[:n], ds.y_test[:n]
+
+
+def test_set(ds: Dataset):
+    """Друга половина: лише для звітної точності, у консенсусі не бере участі."""
+    n = ds.x_test.shape[0] // 2
+    return ds.x_test[n:], ds.y_test[n:]
+
+
 def to_input(x_uint8: torch.Tensor) -> torch.Tensor:
     return ((x_uint8.float() / 255.0 - MEAN) / STD).unsqueeze(1)
 

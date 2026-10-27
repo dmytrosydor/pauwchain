@@ -1,10 +1,11 @@
-"""Експеримент E2: матриця «атака × механізм».
+"""Експеримент E2: матриця «атака (з різною силою) × механізм».
 
-Для кожної стартової точки (стан моделі після r сумлінних раундів) і кожного повтору
-будуємо сумлінний блок і блоки всіх атак, проганяємо кожен механізм і пишемо рядок у CSV.
-Для рядка kind=honest частка відхилень — це FRR.
+Для кожного task_seed, кожної стартової точки (стан моделі після r сумлінних раундів) і кожного повтору
+будуємо сумлінний блок і блоки атак із набору, проганяємо кожен механізм і пишемо рядок у CSV.
+Рядок honest дає FRR. Для механізму C блоки будуються окремо, із seed завдання (Р8): від цього
+залежить, що може скопіювати плагіатор.
 
-python -m sim.matrix --out experiments/runs/e2 --trials 5 --starts 0,3,8
+python -m sim.matrix --out experiments/runs/e2 --task-seeds 42,43,44 --starts 0,3,8 --trials 3
 """
 import argparse
 import csv
@@ -14,17 +15,38 @@ import random
 import time
 from collections import defaultdict
 
-import torch
-
 from sim import attacks
-from sim.core import Task, block_seed, miner_id
-from sim.mechanisms import run
+from sim.core import TASK_ID, Task, block_seed, miner_id
+from sim.mechanisms import clear_replica_cache, run
+from sim.provenance import write_manifest
+from sim.verify_stats import wilson
 from worker.canonical import canonical_weight_hash
-from worker.data import load_dataset
+from worker.data import load_dataset, test_set, val_set
 from worker.model import init_state
 from worker.train import accuracy, to_micro, train_block
 
-MECHS = ["A", "B", "C", "D", "B+D"]
+MECHS = ["A", "B", "R", "C", "D", "B+D"]
+
+# Набір атак: (тип, параметри). Сила кожної атаки варіюється, щоб отримати криві, а не 0/1.
+SUITES = {
+    "main": [
+        ("honest", {}),
+        ("lazy", {}),
+        ("metric_lie", {"inflate": 0.05}),
+        ("plagiarism", {}),
+        ("partial", {"frac": 0.1}), ("partial", {"frac": 0.5}), ("partial", {"frac": 0.9}),
+        ("poison", {"p": 0.1}), ("poison", {"p": 0.3}), ("poison", {"p": 1.0}),
+        ("spoof_tiny", {"scale": 0.05}), ("spoof_tiny", {"scale": 0.5}),
+        ("spoof_tolerance", {"mix": 0.0}), ("spoof_tolerance", {"mix": 0.5}), ("spoof_tolerance", {"mix": 1.0}),
+        ("one_jump", {}),
+    ],
+    "quick": [("honest", {}), ("lazy", {}), ("plagiarism", {}), ("partial", {"frac": 0.1}),
+              ("poison", {"p": 1.0}), ("spoof_tolerance", {}), ("one_jump", {})],
+}
+
+
+def label(kind: str, params: dict) -> str:
+    return kind + ("(" + ",".join(f"{k}={v}" for k, v in params.items()) + ")" if params else "")
 
 
 def warm_states(task: Task, task_seed: int, starts):
@@ -40,84 +62,125 @@ def warm_states(task: Task, task_seed: int, starts):
     return out
 
 
+def build_blocks(task, suite, w_start, prev, r, trial, seed_mode, commit_reveal):
+    """Блоки всіх атак набору. seed_mode: "miner" (Р2) або "task" (Р8, для C)."""
+    victim_id, me = miner_id(10 + trial), miner_id(100 + trial)
+    if seed_mode == "task":
+        victim_seed = my_seed = block_seed(prev, TASK_ID, r)
+    else:
+        victim_seed, my_seed = block_seed(prev, victim_id, r), block_seed(prev, me, r)
+    victim = attacks.honest(task, w_start, victim_id, victim_seed)
+    blocks = []
+    for kind, params in suite:
+        if kind == "honest":
+            blk = victim
+        elif kind == "plagiarism" and seed_mode == "task" and commit_reveal:
+            # Commit-reveal: зобов'язання подаються до розкриття, копіювати нічого — лишається подати без роботи.
+            blk = attacks.lazy(task, w_start, me, my_seed)
+            blk.kind = "plagiarism"
+        else:
+            blk = attacks.make(kind, task, w_start, me, my_seed, victim=victim, **params)
+        blocks.append((label(kind, params), kind, blk))
+    return victim, blocks
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="experiments/runs/e2")
     ap.add_argument("--dataset", default="mnist")
-    ap.add_argument("--trials", type=int, default=5)
+    ap.add_argument("--suite", default="main", choices=sorted(SUITES))
+    ap.add_argument("--task-seeds", default="42")
+    ap.add_argument("--trials", type=int, default=3)
     ap.add_argument("--starts", default="0,3,8")
     ap.add_argument("--K", type=int, default=200)
     ap.add_argument("--k", type=int, default=20)
     ap.add_argument("--lr", type=float, default=0.05)
     ap.add_argument("--miner-device", default="cpu")
     ap.add_argument("--validator-device", default="cpu")
+    ap.add_argument("--replica-devices", default="cpu", help="пристрої реплік C, напр. cpu,mps")
+    ap.add_argument("--no-commit-reveal", action="store_true")
     ap.add_argument("--mechs", default=",".join(MECHS))
-    ap.add_argument("--kinds", default=",".join(attacks.kinds()))
-    ap.add_argument("--params", default="{}", help="JSON: параметри механізмів, напр. {\"B\": {\"q\": 1}}")
+    ap.add_argument("--params", default="{}", help='JSON за літерою механізму, напр. {"B": {"q": 1}}')
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
-    torch.set_num_threads(max(1, torch.get_num_threads()))
+    write_manifest(args.out, vars(args))
     ds = load_dataset(args.dataset)
     miner_task = Task(ds, args.K, args.k, lr=args.lr, device=args.miner_device)
     val_task = miner_task.on(args.validator_device)
-    starts = [int(s) for s in args.starts.split(",")]
     mechs = args.mechs.split(",")
-    kinds = args.kinds.split(",")
     params = json.loads(args.params)
+    params.setdefault("C", {})["replica_devices"] = args.replica_devices.split(",")
+    suite = SUITES[args.suite]
+    commit_reveal = not args.no_commit_reveal
 
     rows = []
     t_start = time.perf_counter()
-    for r, (w_start, prev) in warm_states(miner_task, 42, starts).items():
-        base_metric = to_micro(accuracy(w_start, ds.x_test, ds.y_test))
-        for trial in range(args.trials):
-            victim_id, me = miner_id(10 + trial), miner_id(100 + trial)
-            victim = attacks.honest(miner_task, w_start, victim_id, block_seed(prev, victim_id, r))
-            my_seed = block_seed(prev, me, r)
-            for kind in kinds:
-                blk = victim if kind == "honest" else attacks.make(
-                    kind, miner_task, w_start, me, my_seed, victim=victim)
+    for task_seed in [int(s) for s in args.task_seeds.split(",")]:
+        starts = [int(s) for s in args.starts.split(",")]
+        for r, (w_start, prev) in warm_states(miner_task, task_seed, starts).items():
+            mparams = {**params, "A": {"prev_metric_micro": to_micro(accuracy(w_start, *val_set(ds))),
+                                       **params.get("A", {})}}
+            for trial in range(args.trials):
+                sets = {}
+                if any(m != "C" for m in mechs):
+                    sets["miner"] = build_blocks(miner_task, suite, w_start, prev, r, trial, "miner", commit_reveal)
+                if "C" in mechs:
+                    sets["task"] = build_blocks(miner_task, suite, w_start, prev, r, trial, "task", commit_reveal)
                 for mech in mechs:
-                    rng = random.Random(f"{r}/{trial}/{kind}/{mech}")
-                    kw = params.get(mech, {})
-                    if mech == "A":
-                        kw = {"prev_metric_micro": base_metric, **kw}
-                    if mech == "B+D":
-                        kw = {"B": params.get("B", {}), "D": params.get("D", {})}
-                    v = run(mech, val_task, blk, w_start, rng, **kw)
-                    rows.append({
-                        "start_round": r, "trial": trial, "kind": kind, "mechanism": mech,
-                        "rejected": int(v.rejected), "verify_steps": v.cost_steps,
-                        "verify_s": round(v.seconds, 4), "miner_steps": blk.cost_steps, "K": args.K,
-                        "detail": json.dumps(v.detail, default=float)[:500],
-                    })
-            print(f"start {r} trial {trial} done, {time.perf_counter() - t_start:.0f}s", flush=True)
+                    victim, blocks = sets["task" if mech == "C" else "miner"]
+                    honest_acc = accuracy(victim.w_end, *test_set(ds))
+                    for lab, kind, blk in blocks:
+                        rng = random.Random(f"{task_seed}/{r}/{trial}/{lab}/{mech}")
+                        v = run(mech, val_task, blk, w_start, rng, mparams)
+                        acc = honest_acc if blk is victim else accuracy(blk.w_end, *test_set(ds))
+                        rows.append({
+                            "task_seed": task_seed, "start_round": r, "trial": trial, "attack": lab,
+                            "kind": kind, "mechanism": mech, "rejected": int(v.rejected),
+                            "verify_steps": v.cost_steps, "verify_s": round(v.seconds, 4),
+                            "miner_steps": blk.cost_steps, "K": args.K,
+                            "test_acc": round(acc, 4), "damage": round(honest_acc - acc, 4),
+                            "detail": json.dumps(v.detail, default=float)[:400],
+                        })
+                print(f"seed {task_seed} start {r} trial {trial}: {time.perf_counter() - t_start:.0f}s", flush=True)
+            clear_replica_cache()
 
     path = os.path.join(args.out, "matrix.csv")
     with open(path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
         w.writeheader()
         w.writerows(rows)
-    with open(os.path.join(args.out, "config.json"), "w") as f:
-        json.dump(vars(args), f, indent=2)
-
-    summary(rows, mechs, kinds)
+    summary(rows, mechs, [label(k, p) for k, p in suite], args.out)
     print(f"\n{len(rows)} rows → {path}")
 
 
-def summary(rows, mechs, kinds) -> None:
-    rej, n, cost = defaultdict(int), defaultdict(int), defaultdict(float)
+def summary(rows, mechs, labels, out_dir) -> None:
+    rej, n, cost, dmg = defaultdict(int), defaultdict(int), defaultdict(float), defaultdict(list)
     for x in rows:
-        key = (x["kind"], x["mechanism"])
+        key = (x["attack"], x["mechanism"])
         rej[key] += x["rejected"]
         n[key] += 1
         cost[x["mechanism"]] += x["verify_steps"] / x["K"]
-    print("\nчастка відхилених (для honest — FRR)")
-    print(f"{'':16s}" + "".join(f"{m:>8s}" for m in mechs))
-    for kind in kinds:
-        print(f"{kind:16s}" + "".join(f"{rej[kind, m] / n[kind, m]:8.2f}" for m in mechs))
-    per_mech = {m: sum(n[k, m] for k in kinds) for m in mechs}
-    print(f"{'overhead V/K':16s}" + "".join(f"{cost[m] / per_mech[m]:8.3f}" for m in mechs))
+        if x["mechanism"] != "C":  # у наборі для C плагіат під commit-reveal — інший блок
+            dmg[x["attack"]].append(x["damage"])
+    table = {}
+    print("\nчастка відхилених [95 % ДІ Вільсона]; рядок honest — FRR")
+    print(f"{'':30s}" + "".join(f"{m:>18s}" for m in mechs) + f"{'шкода':>9s}")
+    for lab in labels:
+        cells = []
+        for m in mechs:
+            k_, n_ = rej[lab, m], n[lab, m]
+            lo, hi = wilson(k_, n_)
+            table.setdefault(lab, {})[m] = {"rate": k_ / n_ if n_ else None, "ci": [lo, hi], "n": n_}
+            cells.append(f"{k_ / n_:5.2f} [{lo:.2f},{hi:.2f}]" if n_ else "-")
+        mean_dmg = sum(dmg[lab]) / len(dmg[lab]) if dmg[lab] else 0.0
+        table[lab]["damage_mean"] = mean_dmg
+        print(f"{lab:30s}" + "".join(f"{c:>18s}" for c in cells) + f"{mean_dmg:9.3f}")
+    per_mech = {m: sum(n[lab, m] for lab in labels) for m in mechs}
+    overhead = {m: cost[m] / per_mech[m] for m in mechs}
+    print(f"{'вартість перевірки / K':30s}" + "".join(f"{overhead[m]:18.3f}" for m in mechs))
+    with open(os.path.join(out_dir, "summary.json"), "w") as f:
+        json.dump({"table": table, "overhead": overhead}, f, indent=2, ensure_ascii=False)
 
 
 if __name__ == "__main__":

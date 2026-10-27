@@ -78,8 +78,9 @@ def test_pick_transitions_private():
 
 def test_verify_a():
     ckpts = honest()
+    from worker.data import val_set
     from worker.train import accuracy, to_micro
-    true = to_micro(accuracy(ckpts[-1], DS.x_test, DS.y_test))
+    true = to_micro(accuracy(ckpts[-1], *val_set(DS)))
     ok = verify_a(ckpts[-1], DS, true, 200, 0.0, random.Random(1))
     assert ok["verdict"] == "accept"
     lie = verify_a(ckpts[-1], DS, min(true + 300_000, 1_000_000), 200, 0.05, random.Random(1))

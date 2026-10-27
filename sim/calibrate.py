@@ -16,18 +16,21 @@ from sim import attacks
 from sim.core import Block, Task, block_seed, miner_id
 from sim.matrix import warm_states
 from sim.mechanisms import _grad, _params_flat
+from sim.provenance import write_manifest
 from sim.verify_stats import roc
 from worker.data import load_dataset
 from worker.train import train_steps
 from worker.verify import flat
 
 # Які переходи атаки фальшиві: для partial — лише ті, що після чесного префікса.
-ATTACKS = ["lazy", "partial", "spoof_tiny", "spoof_tolerance", "plagiarism"]
+ATTACKS = ["lazy", "partial", "spoof_tiny", "spoof_tolerance", "plagiarism", "one_jump"]
 
 
 def fake_transitions(blk: Block, m: int):
     if blk.kind == "partial":
         return range(blk.meta["honest_transitions"], m)
+    if blk.kind == "one_jump":
+        return [blk.meta["jump_at"]]
     return range(m)
 
 
@@ -44,6 +47,13 @@ def measure(task: Task, blk: Block, j: int, n_batches: int):
     return ratio, cos
 
 
+def _write(out_dir: str, rows) -> None:
+    with open(os.path.join(out_dir, "transitions.csv"), "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="experiments/runs/e1")
@@ -58,6 +68,7 @@ def main() -> None:
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
+    write_manifest(args.out, vars(args))
     ds = load_dataset(args.dataset)
     devices = args.devices.split(",")
     starts = [int(s) for s in args.starts.split(",")]
@@ -80,13 +91,7 @@ def main() -> None:
                             rows.append({"k": k, "start_round": r, "miner": mi, "device": dev,
                                          "kind": blk.kind, "j": j, "ratio": ratio, "cos": cos})
             print(f"k={k} start={r} done ({len(rows)} rows)", flush=True)
-
-    with open(os.path.join(args.out, "transitions.csv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0]))
-        w.writeheader()
-        w.writerows(rows)
-    with open(os.path.join(args.out, "config.json"), "w") as f:
-        json.dump(vars(args), f, indent=2)
+            _write(args.out, rows)  # проміжний запис: перерваний прогін не втрачає даних
 
     summary = roc(rows)
     with open(os.path.join(args.out, "summary.json"), "w") as f:

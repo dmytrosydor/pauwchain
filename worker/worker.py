@@ -9,7 +9,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from worker.canonical import derive_seed
-from worker.data import load_dataset
+from worker.data import load_dataset, val_set
 from worker.model import init_state
 from worker.store import load_state, save_state
 from worker.train import accuracy, ckpt_root, hash_states, to_micro, train_block
@@ -37,7 +37,7 @@ def op_train(task: dict) -> dict:
     hashes = hash_states(ckpts)
     for c in ckpts:
         save_state(task["store_dir"], c)
-    metric = accuracy(ckpts[-1], ds.x_test, ds.y_test, device)
+    metric = accuracy(ckpts[-1], *val_set(ds), device)
     return {
         "w_end": hashes[-1].hex(),
         "ckpt_hashes": [h.hex() for h in hashes],

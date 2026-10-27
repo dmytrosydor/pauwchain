@@ -10,6 +10,7 @@ import csv
 import json
 import os
 
+from sim.provenance import write_manifest
 from sim.simulator import Config, centralized, report, simulate
 from worker.data import load_dataset
 
@@ -18,8 +19,10 @@ SCENARIOS = [
     {"name": "B_lazy", "mechanism": "B", "attack": {"kind": "lazy"}},
     {"name": "A_poison30", "mechanism": "A", "attack": {"kind": "poison", "p": 0.3}},
     {"name": "B_poison30", "mechanism": "B", "attack": {"kind": "poison", "p": 0.3}},
+    {"name": "B_one_jump", "mechanism": "B", "attack": {"kind": "one_jump"}},
     # 5c удвічі дорожча за чесну роботу; speed = 2 — атакувальник із удвічі швидшим залізом.
     {"name": "B_spoof_tolerance_x2", "mechanism": "B", "attack": {"kind": "spoof_tolerance", "speed": 2.0}},
+    {"name": "R_spoof_tolerance_x2", "mechanism": "R", "attack": {"kind": "spoof_tolerance", "speed": 2.0}},
 ]
 
 
@@ -34,6 +37,7 @@ def main() -> None:
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
+    write_manifest(args.out, vars(args))
     chosen = [s for s in SCENARIOS if s["name"] in args.scenarios.split(",")]
     per_round, finals = [], []
     for sc in chosen:
@@ -41,7 +45,8 @@ def main() -> None:
             n_bad = round(frac * args.nodes)
             cfg = Config(name=f"{sc['name']}_{int(frac * 100)}", rounds=args.rounds,
                          n_honest=args.nodes - n_bad, attackers=[dict(sc["attack"]) for _ in range(n_bad)],
-                         mechanism=sc["mechanism"], max_validators=args.max_validators, baseline=False)
+                         mechanism=sc["mechanism"], max_validators=args.max_validators, baseline=False,
+                         verify_all=False)
             print(f"== {cfg.name}", flush=True)
             res = simulate(cfg)
             rep = report(cfg, res)

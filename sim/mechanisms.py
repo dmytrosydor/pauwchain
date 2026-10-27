@@ -1,8 +1,10 @@
-"""Механізми верифікації A, B, C, D у вигляді, зручному для симулятора й експериментів.
+"""Механізми верифікації A, B, C, D, R у вигляді, зручному для симулятора й експериментів.
 
 Кожен механізм повертає Verdict: чи відхилено блок, скільки кроків навчання-еквівалента
-витратив валідатор і скільки секунд це зайняло.
+витратив валідатор і скільки секунд це зайняло. Валідатор бачить лише блок (точки, seed,
+заявлену метрику) і вершину ланцюга; тип атаки йому невідомий.
 """
+import itertools
 import random
 import time
 from dataclasses import dataclass, field
@@ -16,6 +18,10 @@ from worker.data import batch_indices, permutation, to_input
 from worker.model import mnist_cnn
 from worker.train import train_block
 from worker.verify import flat, pick_transitions, verify_a, verify_b
+
+# Відкалібровано в E1 (k = 20, CPU ↔ MPS): найбільша відносна похибка чесного вузла 0,0084,
+# FRR = 0 при α = 0,05. Для k = 50 запас менший — див. docs/strategy.md, розділ 10.
+DEFAULT_ALPHA = 0.05
 
 
 @dataclass
@@ -35,76 +41,113 @@ def _structural(task: Task, blk: Block, w_start: State) -> Optional[str]:
 
 
 def mech_a(task: Task, blk: Block, w_start: State, rng: random.Random, subset: int = 2000,
-           eps: float = 0.02, prev_metric_micro: Optional[int] = None) -> Verdict:
-    """A: метрика на випадковій підвибірці тесту; і не гірше за попередній блок більше ніж на ε."""
+           eps: float = 0.02, prev_metric_micro: Optional[int] = None,
+           min_gain: Optional[float] = None) -> Verdict:
+    """A (Р9): заявлена метрика збігається з виміряною на випадковій валідаційній підвибірці в межах ε;
+    модель не гірша за вершину ланцюга більше ніж на ε; за min_gain — ще й покращилась щонайменше на min_gain.
+    """
     t0 = time.perf_counter()
     bad = _structural(task, blk, w_start)
     if bad:
         return Verdict(True, 0, time.perf_counter() - t0, {"reason": bad})
     r = verify_a(blk.w_end, task.ds, blk.metric_micro, subset, eps, rng, task.device)
     rejected = r["verdict"] == "reject"
-    if prev_metric_micro is not None and r["measured"] < prev_metric_micro / 1e6 - eps:
-        rejected = True
+    if prev_metric_micro is not None:
+        prev = prev_metric_micro / 1e6
+        if r["measured"] < prev - eps:
+            rejected = True
+        if min_gain is not None and r["measured"] < prev + min_gain:
+            rejected = True
     # Прямий прохід ≈ 1/3 кроку навчання на тому самому обсязі даних.
     cost = subset / task.batch_size / 3
     return Verdict(rejected, cost, time.perf_counter() - t0, r)
 
 
+def _mean_pairwise_cos(vectors: List[torch.Tensor]) -> Optional[float]:
+    vs = [v for v in vectors if v.norm() > 0]
+    if len(vs) < 2:
+        return None
+    cos = [float(a @ b / (a.norm() * b.norm())) for a, b in itertools.combinations(vs, 2)]
+    return sum(cos) / len(cos)
+
+
 def mech_b(task: Task, blk: Block, w_start: State, rng: random.Random, q: int = 2,
-           rule: Optional[Dict] = None) -> Verdict:
-    """B: перерахунок q приватно обраних переходів (Р5, Р6)."""
-    rule = rule or {"kind": "relative", "alpha": 0.3}
+           alpha: float = DEFAULT_ALPHA, delta: Optional[float] = None,
+           residual_tau: Optional[float] = None) -> Verdict:
+    """B (Р5, Р6): перерахунок q приватно обраних переходів.
+
+    Поріг відносний: ‖W_перерах − W_заявл‖ ≤ α·‖W_перерах − W_from‖; якщо задано delta — абсолютний
+    (delta = 0 — точний збіг, «B-exact»).
+    residual_tau вмикає тест напрямку залишків (механізм R): у чесного вузла залишки r_j = W_заявл − W_перерах
+    — це шум обчислень і між переходами майже некорельовані; атакувальник, що зсуває кожну точку в межах
+    порогу в одному напрямку, дає співнапрямлені залишки. Відхилити, якщо середній попарний cos > residual_tau.
+    """
+    rule = {"kind": "absolute", "delta": delta} if delta is not None else {"kind": "relative", "alpha": alpha}
     t0 = time.perf_counter()
     bad = _structural(task, blk, w_start)
     if bad:
         return Verdict(True, 0, time.perf_counter() - t0, {"reason": bad})
-    checks = []
+    checks, residuals = [], []
     for j in pick_transitions(task.m, q, rng):
         r = verify_b(blk.ckpts[j], blk.ckpts[j + 1], task.ds, blk.seed, j * task.k, task.k,
-                     task.batch_size, task.lr, rule, task.device)
+                     task.batch_size, task.lr, rule, task.device, return_residual=True)
+        residuals.append(r.pop("residual"))
         checks.append({"j": j, **r})
     rejected = any(c["verdict"] == "reject" for c in checks)
-    return Verdict(rejected, len(checks) * task.k, time.perf_counter() - t0, {"checks": checks})
+    detail = {"checks": checks}
+    if residual_tau is not None:
+        cos = _mean_pairwise_cos(residuals)
+        detail["residual_cos"] = cos
+        if cos is not None and cos > residual_tau:
+            rejected = True
+    return Verdict(rejected, len(checks) * task.k, time.perf_counter() - t0, detail)
 
 
 _replicas: Dict = {}
 
 
-def _replica_end(task: Task, w_start: State, seed: int) -> torch.Tensor:
-    # Репліки на одному пристрої дають побітово однаковий результат, тож у симуляції його можна
-    # порахувати раз; вартість (n−1)·K усе одно враховується у Verdict.
+def _replica_end(task: Task, w_start: State, seed: int):
+    """W_end чесної репліки. На одному пристрої результат побітово однаковий, тому кеш точний;
+    час обчислення зберігається, щоб вартість у секундах лишалась чесною."""
     key = (canonical_weight_hash(w_start), seed, task.device, task.K, task.k, task.lr, task.batch_size)
     if key not in _replicas:
+        t0 = time.perf_counter()
         end = train_block(w_start, task.ds, seed, task.K, task.k, task.batch_size, task.lr,
                           task.device)[-1]
-        _replicas[key] = flat(end)
+        _replicas[key] = (flat(end), time.perf_counter() - t0)
     return _replicas[key]
 
 
-def mech_c(task: Task, blk: Block, w_start: State, replicas: int = 3, alpha: float = 0.3,
-           commit_reveal: bool = True) -> Verdict:
-    """C: реплікація. n−1 інших вузлів виконують те саме завдання з тим самим seed (Р8),
-    заявлений W_end порівнюється з медіаною реплік у межах α·‖W_медіана − W_start‖.
+def clear_replica_cache() -> None:
+    _replicas.clear()
 
-    Без commit-reveal плагіатор просто копіює розкриту репліку — і проходить.
-    З commit-reveal копіювати нічого, тож він подає без роботи (еквівалент лінивого).
+
+def mech_c(task: Task, blk: Block, w_start: State, replicas: int = 3, alpha: float = DEFAULT_ALPHA,
+           replica_devices: Optional[List[str]] = None) -> Verdict:
+    """C (Р8): реплікація. n−1 інших вузлів виконують те саме завдання з тим самим seed завдання;
+    W_end заявника порівнюється з поелементною медіаною всіх n результатів (разом із заявленим),
+    поріг α·‖W_медіана − W_start‖. Репліки можуть рахувати на різних пристроях (replica_devices).
+
+    Блок для C має бути побудований із seed завдання — це забезпечує той, хто генерує блоки
+    (sim.matrix / sim.simulator), бо від правила seed залежить, що атакувальник може скопіювати.
     """
+    if replicas % 2 == 0:
+        raise ValueError("replicas must be odd so the median is a real middle value")
     t0 = time.perf_counter()
     bad = _structural(task, blk, w_start)
     if bad:
         return Verdict(True, 0, time.perf_counter() - t0, {"reason": bad})
-    n_other = replicas - 1
-    stacked = torch.stack([_replica_end(task, w_start, blk.seed) for _ in range(n_other)])
-    median = stacked.median(dim=0).values
-    if blk.kind == "plagiarism" and not commit_reveal:
-        claimed = median  # скопійовано з розкритої репліки
-    elif blk.kind == "plagiarism":
-        claimed = flat(w_start)
-    else:
-        claimed = flat(blk.w_end)
+    devices = replica_devices or [task.device]
+    ends, seconds = [], 0.0
+    for i in range(replicas - 1):
+        end, s = _replica_end(task.on(devices[i % len(devices)]), w_start, blk.seed)
+        ends.append(end)
+        seconds += s
+    claimed = flat(blk.w_end)
+    median = torch.stack([claimed] + ends).median(dim=0).values
     distance = (claimed - median).norm().item()
     threshold = alpha * (median - flat(w_start)).norm().item()
-    return Verdict(distance > threshold, n_other * task.K, time.perf_counter() - t0,
+    return Verdict(distance > threshold, (replicas - 1) * task.K, time.perf_counter() - t0 + seconds,
                    {"distance": distance, "threshold": threshold})
 
 
@@ -130,7 +173,7 @@ def _params_flat(state: State) -> torch.Tensor:
 
 def mech_d(task: Task, blk: Block, w_start: State, rng: random.Random, q: int = 2,
            n_batches: int = 4, tau: float = 0.1) -> Verdict:
-    """D: градієнтна узгодженість. cos(ΔW_заявл, −∇L) на перших n_batches призначених батчах переходу ≥ τ."""
+    """D (Р10): cos(ΔW_заявл, −∇L) на перших n_batches призначених батчах переходу ≥ τ."""
     t0 = time.perf_counter()
     bad = _structural(task, blk, w_start)
     if bad:
@@ -146,15 +189,32 @@ def mech_d(task: Task, blk: Block, w_start: State, rng: random.Random, q: int = 
     return Verdict(rejected, len(checks) * n_batches, time.perf_counter() - t0, {"checks": checks})
 
 
-MECHANISMS = {"A": mech_a, "B": mech_b, "C": mech_c, "D": mech_d}
+DEFAULT_RESIDUAL_TAU = 0.5
 
 
-def run(name: str, task: Task, blk: Block, w_start: State, rng: random.Random, **kw) -> Verdict:
-    if name == "B+D":
-        b = mech_b(task, blk, w_start, rng, **kw.get("B", {}))
-        d = mech_d(task, blk, w_start, rng, **kw.get("D", {}))
-        return Verdict(b.rejected or d.rejected, b.cost_steps + d.cost_steps,
-                       b.seconds + d.seconds, {"B": b.detail, "D": d.detail})
+def _one(name: str, task: Task, blk: Block, w_start: State, rng: random.Random, params: Dict) -> Verdict:
+    p = params.get(name, {})
+    if name == "A":
+        return mech_a(task, blk, w_start, rng, **p)
+    if name == "B":
+        return mech_b(task, blk, w_start, rng, **p)
+    if name == "R":
+        merged = {"residual_tau": DEFAULT_RESIDUAL_TAU, **params.get("B", {}), **p}
+        return mech_b(task, blk, w_start, rng, **merged)
     if name == "C":
-        return mech_c(task, blk, w_start, **kw)
-    return MECHANISMS[name](task, blk, w_start, rng, **kw)
+        return mech_c(task, blk, w_start, **p)
+    if name == "D":
+        return mech_d(task, blk, w_start, rng, **p)
+    raise ValueError(f"unknown mechanism {name}")
+
+
+def run(name: str, task: Task, blk: Block, w_start: State, rng: random.Random,
+        params: Optional[Dict] = None) -> Verdict:
+    """name — один механізм ("B") або комбінація через «+» ("B+D", "A+R"); params — за літерою механізму.
+    Комбінацію відхилено, якщо відхилив хоч один складник."""
+    params = params or {}
+    parts = [_one(n, task, blk, w_start, rng, params) for n in name.split("+")]
+    if len(parts) == 1:
+        return parts[0]
+    return Verdict(any(v.rejected for v in parts), sum(v.cost_steps for v in parts),
+                   sum(v.seconds for v in parts), {n: v.detail for n, v in zip(name.split("+"), parts)})

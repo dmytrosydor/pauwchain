@@ -2,7 +2,7 @@ import random
 from typing import Dict, List
 import torch
 
-from worker.data import Dataset
+from worker.data import Dataset, val_set
 from worker.train import accuracy, train_steps
 
 State = Dict[str, torch.Tensor]
@@ -28,6 +28,7 @@ def verify_b(
     lr: float,
     threshold_rule: Dict,
     device: str = "cpu",
+    return_residual: bool = False,
 ) -> Dict:
     """Механізм B: перерахувати k кроків від ckpt_from і порівняти з заявленою ckpt_to.
 
@@ -47,12 +48,15 @@ def verify_b(
     else:
         raise ValueError(f"unknown threshold kind: {kind}")
 
-    return {
+    out = {
         "verdict": "accept" if distance <= threshold else "reject",
         "distance": distance,
         "threshold": threshold,
         "update_norm": update,
     }
+    if return_residual:
+        out["residual"] = w_to - w_rec  # залишок r_j для тесту напрямку
+    return out
 
 
 def verify_a(
@@ -64,10 +68,11 @@ def verify_a(
     rng: random.Random,
     device: str = "cpu",
 ) -> Dict:
-    """Механізм A: точність на випадковій підвибірці тесту має бути в межах ε від заявленої (Р9)."""
-    n = ds.x_test.shape[0]
+    """Механізм A: точність на випадковій підвибірці валідаційної частини має бути в межах ε від заявленої (Р9)."""
+    x_val, y_val = val_set(ds)
+    n = x_val.shape[0]
     idx = torch.tensor(sorted(rng.sample(range(n), min(subset, n))))
-    measured = accuracy(state, ds.x_test[idx], ds.y_test[idx], device)
+    measured = accuracy(state, x_val[idx], y_val[idx], device)
     claimed = claimed_metric_micro / 1_000_000
     return {
         "verdict": "accept" if abs(measured - claimed) <= eps else "reject",

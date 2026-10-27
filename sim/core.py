@@ -46,6 +46,9 @@ class Block:
         return self.ckpts[-1]
 
 
+TASK_ID = b"\xee" * 32  # ідентифікатор завдання: від нього seed реплікації C (Р8)
+
+
 def miner_id(i: int) -> bytes:
     return bytes([i + 1]) * 32
 

@@ -2,7 +2,8 @@
 from collections import defaultdict
 from typing import Dict, List
 
-ALPHAS = [0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 0.8]
+# α = 0 — точний збіг (B-exact); логарифмічна сітка до 1, бо чесна похибка ~1e-6…1e-2.
+ALPHAS = [0, 1e-6, 1e-5, 1e-4, 1e-3, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0]
 TAUS = [-0.2, 0.0, 0.05, 0.1, 0.2, 0.3, 0.4]
 
 
@@ -30,3 +31,14 @@ def roc(rows: List[Dict]) -> Dict:
             "n": {kind: len(v["ratio"]) for kind, v in kinds.items()},
         }
     return out
+
+
+def wilson(hits: int, n: int, z: float = 1.96):
+    """95 % довірчий інтервал Вільсона для частки hits/n."""
+    if n == 0:
+        return (0.0, 1.0)
+    p = hits / n
+    denom = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    half = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / denom
+    return (max(0.0, centre - half), min(1.0, centre + half))

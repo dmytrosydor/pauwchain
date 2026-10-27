@@ -1,16 +1,18 @@
 """Моделі поведінки майнера: сумлінна робота й атаки 1–5 (docs/research/technical.md, розділ 8)."""
 import math
+import random
 from dataclasses import replace
 from typing import List
 import torch
 
 from sim.core import Block, State, Task, add, clone, sub
-from worker.data import Dataset
+from sim.mechanisms import DEFAULT_ALPHA
+from worker.data import Dataset, val_set
 from worker.train import accuracy, to_micro, train_block, train_steps
 
 
 def _metric(task: Task, state: State) -> int:
-    return to_micro(accuracy(state, task.ds.x_test, task.ds.y_test, task.device))
+    return to_micro(accuracy(state, *val_set(task.ds), task.device))
 
 
 def honest(task: Task, w_start: State, miner: bytes, seed: int) -> Block:
@@ -74,33 +76,66 @@ def spoof_tiny(task: Task, w_start: State, miner: bytes, seed: int, scale: float
     return Block(miner, seed, ckpts, _metric(task, ckpts[-1]), "spoof_tiny", task.m)
 
 
-def spoof_tolerance(task: Task, w_start: State, miner: bytes, seed: int, alpha: float = 0.3,
-                    beta: float = 0.9, p: float = 1.0) -> Block:
-    """Атака 5c: експлуатація толерантності B.
+def spoof_tolerance(task: Task, w_start: State, miner: bytes, seed: int, alpha: float = DEFAULT_ALPHA,
+                    beta: float = 0.9, p: float = 1.0, mix: float = 0.0) -> Block:
+    """Атака 5c: експлуатація толерантності B. Адаптивна: атакувальник знає поріг валідатора α.
 
-    На кожному переході чесний результат зсувається в бік отруєної моделі на β·α·‖Δ‖ —
-    трохи менше за відносний поріг, тож B не бачить різниці, а модель дрейфує до мети атакувальника.
+    На кожному переході чесний результат зсувається на β·α·‖Δ‖ — трохи менше за поріг, тож B не бачить
+    різниці. Напрямок зсуву: до отруєної моделі (mix = 0), випадковий (mix = 1) або їх суміш. Випадкова
+    складова — спроба обійти тест напрямку залишків R ціною меншої шкоди.
     """
     bad = flip_labels(task.ds, p)
+    g = torch.Generator().manual_seed(seed & 0x7FFFFFFF)
     ckpts = [clone(w_start)]
     for j in range(task.m):
         cur = ckpts[-1]
         good, _ = train_steps(cur, task.ds, seed, j * task.k, task.k, task.batch_size, task.lr, task.device)
         evil, _ = train_steps(cur, bad, seed, j * task.k, task.k, task.batch_size, task.lr, task.device)
-        delta = sub(good, cur)
-        direction = sub(evil, good)
-        dn = _norm(direction)
-        shift = beta * alpha * _norm(delta) / dn if dn > 0 else 0.0
+        target = _unit(sub(evil, good))
+        noise = _unit({n: torch.randn(t.shape, generator=g) for n, t in good.items()})
+        direction = _unit({n: (1 - mix) * target[n] + mix * noise[n] for n in good})
+        shift = beta * alpha * _norm(sub(good, cur))
         ckpts.append(add(good, direction, shift))
     return Block(miner, seed, ckpts, _metric(task, ckpts[-1]), "spoof_tolerance", 2 * task.K,
-                 {"alpha": alpha, "beta": beta})
+                 {"alpha": alpha, "beta": beta, "mix": mix})
+
+
+def one_jump(task: Task, w_start: State, miner: bytes, seed: int, p: float = 1.0,
+             lr_boost: float = 10.0, jump_at: int = None) -> Block:
+    """Адаптивна атака «один стрибок»: m−1 переходів чесні, а один (j*) замінено на k кроків
+    на отруєних мітках зі збільшеним кроком навчання. B ловить її, лише якщо випадково вибере саме j*:
+    імовірність пропуску одним валідатором 1 − q/m, V незалежними — (1 − q/m)^V.
+    """
+    j_star = jump_at if jump_at is not None else random.Random(seed).randrange(task.m)
+    bad = flip_labels(task.ds, p)
+    ckpts = [clone(w_start)]
+    for j in range(task.m):
+        ds, lr = (bad, task.lr * lr_boost) if j == j_star else (task.ds, task.lr)
+        nxt, _ = train_steps(ckpts[-1], ds, seed, j * task.k, task.k, task.batch_size, lr, task.device)
+        ckpts.append(nxt)
+    return Block(miner, seed, ckpts, _metric(task, ckpts[-1]), "one_jump", task.K, {"jump_at": j_star})
+
+
+def metric_lie(task: Task, w_start: State, miner: bytes, seed: int, inflate: float = 0.05,
+               sigma: float = 1e-4) -> Block:
+    """Ліниве повторення із завищеною заявленою метрикою: «модель покращилась на inflate»."""
+    blk = lazy(task, w_start, miner, seed, sigma)
+    blk.metric_micro = min(1_000_000, blk.metric_micro + round(inflate * 1_000_000))
+    blk.kind = "metric_lie"
+    blk.meta["inflate"] = inflate
+    return blk
 
 
 def _norm(state: State) -> float:
     return math.sqrt(sum(float((t.double() ** 2).sum()) for t in state.values()))
 
 
-ATTACKS = ["lazy", "plagiarism", "partial", "poison", "spoof_tiny", "spoof_tolerance"]
+def _unit(state: State) -> State:
+    n = _norm(state)
+    return {k: v / n for k, v in state.items()} if n > 0 else state
+
+
+ATTACKS = ["lazy", "metric_lie", "plagiarism", "partial", "poison", "spoof_tiny", "spoof_tolerance", "one_jump"]
 
 
 def make(kind: str, task: Task, w_start: State, miner: bytes, seed: int,
@@ -111,8 +146,8 @@ def make(kind: str, task: Task, w_start: State, miner: bytes, seed: int,
         if victim is None:
             raise ValueError("plagiarism needs a victim block")
         return plagiarism(victim, miner, seed)
-    fn = {"lazy": lazy, "partial": partial, "poison": poison,
-          "spoof_tiny": spoof_tiny, "spoof_tolerance": spoof_tolerance}[kind]
+    fn = {"lazy": lazy, "metric_lie": metric_lie, "partial": partial, "poison": poison,
+          "spoof_tiny": spoof_tiny, "spoof_tolerance": spoof_tolerance, "one_jump": one_jump}[kind]
     return fn(task, w_start, miner, seed, **kw)
 
 
