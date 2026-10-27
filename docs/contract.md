@@ -83,6 +83,7 @@ $$\text{Загальний розмір} = 4 + 8 + 32 + 32 + 8 + 32 + 8 + 32 + 3
   "ok": true,
   "w_end": "b0e4...",
   "ckpt_hashes": ["7d31...", "...", "b0e4..."],
+  "ckpt_root": "5c0a...",
   "metric_micro": 912300,
   "steps": 500,
   "seconds": 6.42
@@ -121,12 +122,33 @@ $$\text{Загальний розмір} = 4 + 8 + 32 + 32 + 8 + 32 + 8 + 32 + 3
   "verdict": "accept",
   "distance": 0.0000016,
   "threshold": 0.0021,
+  "update_norm": 0.0070,
   "seconds": 0.31
 }
 ```
 
-* `ok: true/false` — індикатор успішного виконання самого скрипта (без аварійного падіння).
+* `ok: true/false` — індикатор успішного виконання самого скрипта (без аварійного падіння). Якщо `false`, є поле `error`.
 * `verdict: "accept"/"reject"` — рішення щодо валідності перевіреного кроку навчання.
+* `distance` = ‖W_перерах − W_to‖ (L2). Поріг: `relative` — α·`update_norm`, де `update_norm` = ‖W_перерах − W_from‖; `absolute` — `{"kind": "absolute", "delta": δ}`.
+
+---
+
+### 3.3. Генезис (`genesis`)
+
+Вхід: `{"op": "genesis", "task_seed": 42, "store_dir": "store"}`. Вихід: `{"ok": true, "w_start": "<хеш>"}`.
+Початкові ваги детерміновано виводяться з `task_seed` (Р1) і кладуться у сховище.
+
+### 3.4. Перевірка метрики A (`verify_a`)
+
+Вхід: `{"op": "verify_a", "w_end": "...", "metric_micro": 912300, "subset": 2000, "eps": 0.02, "dataset": "mnist", "store_dir": "store"}`.
+Вихід: `{"ok": true, "verdict": "accept", "measured": 0.913, "claimed": 0.9123}`.
+Підвибірку тестового набору валідатор обирає приватно; `validator_seed` — лише для відтворюваних експериментів.
+
+### Спільне для всіх операцій
+
+* Необов'язкове поле `device` (`"cpu"`, `"mps"`, `"cuda"`), за замовчуванням `"cpu"`.
+* Без поля `out` результат друкується в stdout.
+* Seed блоку: `derive_seed(prev_block_hash, miner_id, round)` (Р2). Крок s блоку бере батч `perm[(s·B + i) mod N]`, i = 0..B−1.
 
 ---
 

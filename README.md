@@ -21,7 +21,14 @@
 
 ## Стан
 
-Готово: контракт між C++ і Python (`docs/contract.md`), канонічний хеш ваг і заголовок блоку (`worker/canonical.py`).
+Готово: контракт між C++ і Python (`docs/contract.md`), канонічний хеш ваг і заголовок блоку (`worker/canonical.py`),
+навчання блоку з контрольними точками та механізми перевірки A і B (`worker/`).
+
+```sh
+uv venv --python 3.12 .venv && uv pip install torch torchvision safetensors numpy pytest
+.venv/bin/python -m pytest -q worker/tests
+.venv/bin/python worker/worker.py task.json   # формати task.json — docs/contract.md
+```
 
 Головна контрольна точка: **1 листопада 2026** — три вузли, навчання на MNIST, механізм верифікації B,
 одна атака і перші цифри.

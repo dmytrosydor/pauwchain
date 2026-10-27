@@ -1,14 +1,99 @@
+"""Воркер, який викликає вузол: python worker/worker.py <task.json> (docs/contract.md, розділ 3)."""
+import json
+import os
+import random
 import sys
-import torch
+import time
+
+if __package__ in (None, ""):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from worker.canonical import derive_seed
+from worker.data import load_dataset
+from worker.model import init_state
+from worker.store import load_state, save_state
+from worker.train import accuracy, ckpt_root, hash_states, to_micro, train_block
+from worker.verify import verify_a, verify_b
+
+
+def block_seed(task: dict) -> int:
+    return derive_seed(
+        bytes.fromhex(task["prev_block_hash"]),
+        bytes.fromhex(task["miner_id"]),
+        task["round"],
+    )
+
+
+def op_genesis(task: dict) -> dict:
+    return {"w_start": save_state(task["store_dir"], init_state(task["task_seed"]))}
+
+
+def op_train(task: dict) -> dict:
+    ds = load_dataset(task["dataset"])
+    device = task.get("device", "cpu")
+    w_start = load_state(task["store_dir"], task["w_start"])
+    ckpts = train_block(w_start, ds, block_seed(task), task["K"], task["k"],
+                        task["batch_size"], task["lr"], device)
+    hashes = hash_states(ckpts)
+    for c in ckpts:
+        save_state(task["store_dir"], c)
+    metric = accuracy(ckpts[-1], ds.x_test, ds.y_test, device)
+    return {
+        "w_end": hashes[-1].hex(),
+        "ckpt_hashes": [h.hex() for h in hashes],
+        "ckpt_root": ckpt_root(hashes).hex(),
+        "metric_micro": to_micro(metric),
+        "steps": task["K"],
+    }
+
+
+def op_verify_b(task: dict) -> dict:
+    ds = load_dataset(task["dataset"])
+    return verify_b(
+        load_state(task["store_dir"], task["ckpt_from"]),
+        load_state(task["store_dir"], task["ckpt_to"]),
+        ds, block_seed(task), task["step_from"], task["k"],
+        task["batch_size"], task["lr"], task["threshold_rule"],
+        task.get("device", "cpu"),
+    )
+
+
+def op_verify_a(task: dict) -> dict:
+    ds = load_dataset(task["dataset"])
+    rng = random.Random(task.get("validator_seed"))  # без seed — приватна випадковість ОС
+    return verify_a(
+        load_state(task["store_dir"], task["w_end"]),
+        ds, task["metric_micro"], task["subset"], task["eps"], rng,
+        task.get("device", "cpu"),
+    )
+
+
+OPS = {"genesis": op_genesis, "train": op_train, "verify_b": op_verify_b, "verify_a": op_verify_a}
 
 
 def main() -> int:
-    print("torch", torch.__version__)
-    print("cude", torch.cuda.is_available())
-    print("threads", torch.get_num_threads())
+    if len(sys.argv) != 2:
+        print("usage: worker.py <task.json>", file=sys.stderr)
+        return 2
+    with open(sys.argv[1]) as f:
+        task = json.load(f)
 
-    return 0
+    t0 = time.perf_counter()
+    try:
+        result = {"ok": True, **OPS[task["op"]](task)}
+    except Exception as e:
+        result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    result["seconds"] = round(time.perf_counter() - t0, 3)
+
+    out = task.get("out")
+    if out:
+        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+        with open(out, "w") as f:
+            json.dump(result, f, indent=2)
+    else:
+        print(json.dumps(result, indent=2))
+    return 0 if result["ok"] else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
