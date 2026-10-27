@@ -1,5 +1,5 @@
 import hashlib
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
@@ -8,6 +8,10 @@ from worker.data import Dataset, batch_indices, permutation, to_input
 from worker.model import mnist_cnn
 
 State = Dict[str, torch.Tensor]
+
+
+class Cancelled(Exception):
+    """Навчання перервано ззовні (наприклад, вузол отримав нову вершину ланцюга)."""
 
 
 def _cpu_copy(model: torch.nn.Module) -> State:
@@ -24,11 +28,13 @@ def train_steps(
     lr: float,
     device: str = "cpu",
     ckpt_every: Optional[int] = None,
+    stop: Optional[Callable[[], bool]] = None,
 ) -> Tuple[State, List[State]]:
     """Кроки step_from .. step_from+steps−1 звичайного SGD (без моментуму, Р3).
 
     Повертає кінцевий стан і точки після кожних ckpt_every кроків (якщо задано).
     Той самий виклик на тому самому пристрої дає побітово ті самі ваги.
+    stop перевіряється перед кожним кроком; якщо повертає True — Cancelled.
     """
     model = mnist_cnn()
     model.load_state_dict(state)
@@ -38,6 +44,8 @@ def train_steps(
 
     ckpts = []
     for i in range(steps):
+        if stop is not None and stop():
+            raise Cancelled()
         idx = batch_indices(perm, step_from + i, batch_size)
         x = to_input(ds.x_train[idx]).to(device)
         y = ds.y_train[idx].to(device)
@@ -59,12 +67,13 @@ def train_block(
     batch_size: int,
     lr: float,
     device: str = "cpu",
+    stop: Optional[Callable[[], bool]] = None,
 ) -> List[State]:
     """Робота майнера в блоці (Р4): K кроків, точки C₀..C_m, m = K/k, C₀ = W_start."""
     if K % k != 0:
         raise ValueError(f"K={K} must be a multiple of k={k}")
     start = {n: t.detach().cpu().clone() for n, t in w_start.items()}
-    _, ckpts = train_steps(start, ds, seed, 0, K, batch_size, lr, device, ckpt_every=k)
+    _, ckpts = train_steps(start, ds, seed, 0, K, batch_size, lr, device, ckpt_every=k, stop=stop)
     return [start] + ckpts
 
 

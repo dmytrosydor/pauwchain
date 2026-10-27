@@ -71,6 +71,7 @@ Config parse_args(int argc, char** argv) {
     else if (a == "--task") c.task_path = need(i);
     else if (a == "--python") c.python = need(i);
     else if (a == "--worker") c.worker_script = need(i);
+    else if (a == "--worker-mode") c.worker_mode = need(i);
     else if (a == "--run-dir") c.run_dir = need(i);
     else if (a == "--device") c.device = need(i);
     else if (a == "--lazy") c.lazy = true;
@@ -86,6 +87,9 @@ Config parse_args(int argc, char** argv) {
     throw std::invalid_argument("required: --id, --port, --task");
   }
   if (c.run_dir.empty()) c.run_dir = "run/node-" + c.id;
+  if (c.worker_mode != "server" && c.worker_mode != "spawn") {
+    throw std::invalid_argument("--worker-mode must be server or spawn");
+  }
   return c;
 }
 
@@ -96,10 +100,18 @@ Node::Node(Config cfg) : cfg_(std::move(cfg)) {
   task_ = task_from_json(json::parse(raw), raw);
   miner_id_ = sha256("node-" + cfg_.id);
   std::filesystem::create_directories(cfg_.run_dir);
-  miner_bridge_ = std::make_unique<WorkerBridge>(cfg_.python, cfg_.worker_script,
-                                                 cfg_.run_dir + "/mine");
-  verifier_bridge_ = std::make_unique<WorkerBridge>(cfg_.python, cfg_.worker_script,
-                                                    cfg_.run_dir + "/verify");
+  if (cfg_.worker_mode == "server") {
+    // Окремі процеси для майнінгу й перевірки: перевірка чужих блоків не чекає на власне навчання.
+    miner_bridge_ = std::make_unique<WorkerBridge>(cfg_.python, cfg_.worker_server, cfg_.run_dir + "/mine",
+                                                   cfg_.run_dir + "/mine.sock", task_.dataset);
+    verifier_bridge_ = std::make_unique<WorkerBridge>(cfg_.python, cfg_.worker_server,
+                                                      cfg_.run_dir + "/verify", cfg_.run_dir + "/verify.sock",
+                                                      task_.dataset);
+  } else {
+    miner_bridge_ = std::make_unique<WorkerBridge>(cfg_.python, cfg_.worker_script, cfg_.run_dir + "/mine");
+    verifier_bridge_ = std::make_unique<WorkerBridge>(cfg_.python, cfg_.worker_script,
+                                                      cfg_.run_dir + "/verify");
+  }
   lazy_mode_ = cfg_.lazy;
   events_ = std::make_unique<EventBus>(cfg_.run_dir + "/events.jsonl");
 }

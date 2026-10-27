@@ -14,8 +14,19 @@ class Dataset:
     y_test: torch.Tensor
 
 
+def synthetic(n_train: int = 2000, n_test: int = 400, seed: int = 0) -> Dataset:
+    """Маленький детермінований набір 28×28 для тестів і CI: мітки — argmax фіксованої проєкції."""
+    g = torch.Generator().manual_seed(seed)
+    x = torch.randint(0, 256, (n_train + n_test, 28, 28), dtype=torch.uint8, generator=g)
+    w = torch.randn(28 * 28, 10, generator=g)
+    y = (x.flatten(1).float() @ w).argmax(1)
+    return Dataset(x[:n_train], y[:n_train], x[n_train:], y[n_train:])
+
+
 @lru_cache(maxsize=None)
 def load_dataset(name: str, root: str = "data") -> Dataset:
+    if name == "synthetic":
+        return synthetic()
     from torchvision import datasets
 
     cls = {"mnist": datasets.MNIST, "fashion_mnist": datasets.FashionMNIST}[name]

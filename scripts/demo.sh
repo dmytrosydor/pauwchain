@@ -3,7 +3,8 @@
 # Використання: scripts/demo.sh            — до висоти 5, з лінивим вузлом
 #               HEIGHT=8 LAZY=0 scripts/demo.sh
 #               HEIGHT=0 scripts/demo.sh — мережа працює, доки не натиснути Ctrl-C (для pouwtop)
-# Змінні: HEIGHT (5), LAZY (1), TIMEOUT секунд (300), PYTHON (.venv/bin/python), K (200), k (20).
+# Змінні: HEIGHT (5), LAZY (1), TIMEOUT секунд (300), PYTHON (.venv/bin/python), K (200), k (20),
+#         WORKER_MODE (server — постійний воркер; spawn — новий процес Python на кожен виклик).
 # API вузла i — http://127.0.0.1:$((9200 + i)); дивитися: .venv/bin/python -m tui
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -14,6 +15,7 @@ TIMEOUT=${TIMEOUT:-300}
 PYTHON=${PYTHON:-.venv/bin/python}
 K=${K:-200}
 k=${k:-20}
+WORKER_MODE=${WORKER_MODE:-server}
 DEMO=build/demo
 BASE_PORT=9100
 API_PORT=9200
@@ -49,11 +51,11 @@ for i in "${ids[@]}"; do
   [ "$i" = 4 ] && extra=(--lazy)
   build/node --id "$i" --port $((BASE_PORT + i)) --peers "$(peers_of "$i")" \
     --task "$DEMO/task.json" --store "$DEMO/store" --run-dir "$DEMO/node-$i" \
-    --python "$PYTHON" --max-height "$HEIGHT" --api-port $((API_PORT + i)) \
+    --python "$PYTHON" --max-height "$HEIGHT" --api-port $((API_PORT + i)) --worker-mode "$WORKER_MODE" \
     ${extra[@]+"${extra[@]}"} >"$DEMO/node-$i.log" 2>&1 &
   pids+=($!)
 done
-echo "started nodes ${ids[*]} (K=$K, k=$k, target height $HEIGHT, lazy=$LAZY), logs in $DEMO/"
+echo "started nodes ${ids[*]} (K=$K, k=$k, target height $HEIGHT, lazy=$LAZY, worker=$WORKER_MODE), logs in $DEMO/"
 echo "API: $(for i in "${ids[@]}"; do printf 'http://127.0.0.1:%s ' $((API_PORT + i)); done)"
 
 if [ "$HEIGHT" = 0 ]; then

@@ -9,4 +9,5 @@ ignore = ["E731", "B905"]
 "docs/research/probes/*" = ["E", "F", "B"]  # одноразові скрипти вимірювань, збережені як є
 "scripts/gen_vectors.py" = ["E402"]
 "worker/worker.py" = ["E402"]
+"worker/server.py" = ["E402"]
 "sim/simulator.py" = ["B023"]  # замикання block_of викликається лише в межах свого раунду

@@ -28,10 +28,12 @@ struct Config {
   std::string task_path;
   std::string python = ".venv/bin/python";
   std::string worker_script = "worker/worker.py";
+  std::string worker_server = "worker/server.py";
+  std::string worker_mode = "server";  // server — постійний воркер на Unix socket; spawn — процес на виклик
   std::string run_dir;            // task/result файли воркера, ланцюг і статус вузла
   std::string device = "cpu";
   bool lazy = false;              // атака 1: точки — копії w_start, без навчання
-  double lazy_delay_s = 5.0;      // щоб лінивий вузол не засипав мережу блоками
+  double lazy_delay_s = 1.0;      // щоб лінивий вузол не засипав мережу блоками
   int q = 2;                      // скільки переходів перевіряє механізм B
   double alpha = 0.05;            // відносний поріг B (Р6), відкалібровано в E1 (docs/results.md)
   bool verify_a = false;          // додатково механізм A
