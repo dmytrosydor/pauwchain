@@ -27,7 +27,7 @@
 навчання блоку з контрольними точками та механізми перевірки A і B (`worker/`).
 
 ```sh
-uv venv --python 3.12 .venv && uv pip install torch torchvision safetensors numpy pytest
+uv venv --python 3.12 .venv && uv pip install -r requirements.txt
 .venv/bin/python -m pytest -q worker/tests
 .venv/bin/python worker/worker.py task.json   # формати task.json — docs/contract.md
 ```
@@ -67,12 +67,35 @@ HEIGHT=8 LAZY=0 scripts/demo.sh        # лише сумлінні вузли
 - **Сховище ваг.** Спільна тека `--store`; у блоці лише хеші (рішення В2: сховище вважається доступним).
 - **`--lazy`.** Атака 1: блок, у якому всі точки — копії стартових ваг, без навчання.
 
-Результати вузла — у `--run-dir`: `chain.json`, `status.json` і файли завдань воркера.
+Результати вузла — у `--run-dir`: `chain.json`, `status.json`, `events.jsonl` і файли завдань воркера.
+
+### HTTP API і pouwtop
+
+З `--api-port P` вузол відкриває API на `127.0.0.1:P`:
+
+| Запит | Що повертає |
+|---|---|
+| `GET /status` | висота, вершина, лічильники, режим, піри, параметри перевірки |
+| `GET /chain?from=H` | найкращий ланцюг від висоти H |
+| `GET /block/<hash>` | блок за хешем |
+| `GET /events?since=SEQ` | потік подій (Server-Sent Events): `mined`, `verdict` з усіма перевірками B/A, `tip`, `lost_race`, `peer`, `mode` |
+| `POST /admin` | `{"mode": "lazy"}` / `{"mode": "honest"}` — перемкнути вузол в атакувальника й назад; `{"paused": true}` |
+
+`pouwtop` — термінальний монітор у стилі htop поверх цього API: вузли, ланцюг, точність моделі по блоках
+і журнал перевірок наживо. Клавіші: ↑/↓ — вузол, `l` — лінивий режим, `p` — пауза, `q` — вихід.
+
+```sh
+HEIGHT=0 scripts/demo.sh          # мережа з API на портах 9201–9204, працює до Ctrl-C
+.venv/bin/python -m tui           # в іншому терміналі
+curl -N http://127.0.0.1:9201/events
+```
+
+![pouwtop](docs/figures/pouwtop.png)
 
 ## Тести
 
 ```sh
-.venv/bin/python -m pytest -q worker/tests sim/tests   # Python: контракт, детермінізм, механізми, атаки
+.venv/bin/python -m pytest -q worker/tests sim/tests tui/tests   # контракт, детермінізм, механізми, атаки, монітор
 ctest --test-dir build                                 # C++: ті самі вектори, правила блоку, вибір гілки
 .venv/bin/ruff check .
 python scripts/gen_vectors.py                          # лише якщо змінився контракт
@@ -85,7 +108,8 @@ CI (`.github/workflows/ci.yml`): лінтер і pytest на Linux, збірка
 ## Структура
 
 ```
-node/      C++: блок, ланцюг, валідація, P2P по TCP
+node/      C++: блок, ланцюг, валідація, P2P по TCP, HTTP API
+tui/       Python: pouwtop — монітор мережі
 worker/    Python: навчання, верифікація, атаки
 sim/       Python: симулятор раундів без мережі
 experiments/  конфіги, CSV з результатами, графіки

@@ -21,7 +21,16 @@ FetchContent_Declare(
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
   SOURCE_SUBDIR none)
 
-FetchContent_MakeAvailable(nlohmann_json picosha2)
+# HTTP API вузла: лише заголовок httplib.h, без їхньої збірки.
+FetchContent_Declare(
+  httplib
+  URL https://github.com/yhirose/cpp-httplib/archive/refs/tags/v0.18.1.tar.gz
+  URL_HASH SHA256=405abd8170f2a446fc8612ac635d0db5947c0d2e156e32603403a4496255ff00
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  SOURCE_SUBDIR none)
+
+FetchContent_MakeAvailable(nlohmann_json picosha2 httplib)
+find_package(Threads REQUIRED)
 
 add_library(pouw STATIC
   node/src/hex.cpp
@@ -30,10 +39,12 @@ add_library(pouw STATIC
   node/src/worker_bridge.cpp
   node/src/p2p.cpp
   node/src/node.cpp
+  node/src/events.cpp
+  node/src/api.cpp
 )
 target_include_directories(pouw PUBLIC node/src)
-target_include_directories(pouw SYSTEM PUBLIC ${picosha2_SOURCE_DIR})
-target_link_libraries(pouw PUBLIC nlohmann_json::nlohmann_json)
+target_include_directories(pouw SYSTEM PUBLIC ${picosha2_SOURCE_DIR} ${httplib_SOURCE_DIR})
+target_link_libraries(pouw PUBLIC nlohmann_json::nlohmann_json Threads::Threads)
 target_compile_options(pouw PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(node node/src/main.cpp)

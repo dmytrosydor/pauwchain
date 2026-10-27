@@ -4,10 +4,12 @@
 #include <fstream>
 #include <iostream>
 #include <random>
+#include <thread>
 #include <string>
 
 #include "block.hpp"
 #include "chain.hpp"
+#include "events.hpp"
 
 using namespace pouw;
 
@@ -193,6 +195,29 @@ static void test_chain() {
   std::filesystem::remove(path);
 }
 
+static void test_event_bus() {
+  auto path = (std::filesystem::temp_directory_path() / "pouw_events_test.jsonl").string();
+  std::filesystem::remove(path);
+  EventBus bus(path);
+  CHECK(bus.wait_after(0, 10).empty());  // тайм-аут без подій
+  bus.publish("tip", {{"height", 1}});
+  bus.publish("tip", {{"height", 2}});
+  auto evs = bus.wait_after(1, 10);
+  CHECK(evs.size() == 1 && evs[0].at("seq") == 2 && evs[0].at("data").at("height") == 2);
+  std::thread late([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    bus.publish("mined", json::object());
+  });
+  auto woke = bus.wait_after(2, 2000);  // будиться подією, а не тайм-аутом
+  late.join();
+  CHECK(woke.size() == 1 && woke[0].at("type") == "mined");
+  std::ifstream in(path);
+  int lines = 0;
+  for (std::string l; std::getline(in, l);) ++lines;
+  CHECK(lines == 3);
+  std::filesystem::remove(path);
+}
+
 int main(int argc, char** argv) {
   test_hex();
   test_golden(argc > 1 ? argv[1] : "docs/golden.json");
@@ -200,6 +225,7 @@ int main(int argc, char** argv) {
   test_structure();
   test_chain();
   test_chain_order_independent();
+  test_event_bus();
   if (g_failed) {
     std::cerr << g_failed << " check(s) failed\n";
     return 1;

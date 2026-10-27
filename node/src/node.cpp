@@ -79,6 +79,7 @@ Config parse_args(int argc, char** argv) {
     else if (a == "--alpha") c.alpha = std::stod(need(i));
     else if (a == "--verify-a") c.verify_a = true;
     else if (a == "--max-height") c.max_height = std::stoull(need(i));
+    else if (a == "--api-port") c.api_port = static_cast<uint16_t>(std::stoi(need(i)));
     else throw std::invalid_argument("unknown argument: " + a);
   }
   if (c.id.empty() || c.port == 0 || c.task_path.empty()) {
@@ -99,6 +100,8 @@ Node::Node(Config cfg) : cfg_(std::move(cfg)) {
                                                  cfg_.run_dir + "/mine");
   verifier_bridge_ = std::make_unique<WorkerBridge>(cfg_.python, cfg_.worker_script,
                                                     cfg_.run_dir + "/verify");
+  lazy_mode_ = cfg_.lazy;
+  events_ = std::make_unique<EventBus>(cfg_.run_dir + "/events.jsonl");
 }
 
 void Node::log(const std::string& line) const {
@@ -121,6 +124,20 @@ void Node::run() {
   {
     std::lock_guard lock(mu_);
     persist();
+  }
+  events_->publish("genesis", {{"hash", to_hex(chain_->genesis().hash())}, {"w0", to_hex(w0)},
+                               {"height", chain_->height()}});
+
+  if (cfg_.api_port) {
+    ApiHandlers h;
+    h.status = [this] { return status(); };
+    h.chain_from = [this](uint64_t from) { return chain_from(from); };
+    h.block = [this](const std::string& hex) { return block_json(hex); };
+    h.admin = [this](const json& req) { return admin(req); };
+    h.events = events_.get();
+    api_ = std::make_unique<Api>(cfg_.api_port, std::move(h));
+    api_->start();
+    log("API on http://127.0.0.1:" + std::to_string(cfg_.api_port));
   }
 
   p2p_ = std::make_unique<P2P>(
@@ -168,6 +185,11 @@ void Node::mining_loop() {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
+    if (paused_) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      continue;
+    }
+    const bool lazy = lazy_mode_;
     Block parent;
     {
       std::lock_guard lock(mu_);
@@ -187,7 +209,7 @@ void Node::mining_loop() {
     h.K = task_.K;
     h.k = task_.k;
 
-    if (cfg_.lazy) {
+    if (lazy) {
       if (!sleep_unless(tip_changed_, cfg_.lazy_delay_s)) continue;
       // Ліниве повторення: жодного кроку навчання, усі точки — копії стартових ваг.
       b.ckpt_hashes.assign(task_.K / task_.k + 1, h.w_start);
@@ -201,6 +223,7 @@ void Node::mining_loop() {
       auto res = miner_bridge_->run(t, &tip_changed_);
       if (!res) {
         log("mining aborted at height " + std::to_string(h.height) + ": new tip");
+        events_->publish("mining_aborted", {{"height", h.height}});
         continue;
       }
       if (!res->value("ok", false)) {
@@ -222,17 +245,24 @@ void Node::mining_loop() {
       if (chain_->tip().hash() != parent.hash()) {
         ++lost_races_;
         log("lost race at height " + std::to_string(h.height) + ", block discarded");
+        events_->publish("lost_race", {{"height", h.height}});
         continue;
       }
       // Атакувальник не додає свої блоки собі, а йде за чесним ланцюгом, щоб лишатися в перегонах.
-      if (!cfg_.lazy) {
+      if (!lazy) {
         chain_->add(b);
         persist();
       }
       ++mined_;
     }
-    log(std::string(cfg_.lazy ? "LAZY block" : "MINED") + " h=" + std::to_string(h.height) +
+    log(std::string(lazy ? "LAZY block" : "MINED") + " h=" + std::to_string(h.height) +
         " hash=" + short_hex(b.hash()) + " acc=" + std::to_string(h.metric_micro / 1e4) + "%");
+    events_->publish("mined", {{"height", h.height}, {"hash", to_hex(b.hash())}, {"lazy", lazy},
+                               {"metric_micro", h.metric_micro}});
+    if (!lazy) {
+      events_->publish("tip", {{"height", h.height}, {"hash", to_hex(b.hash())},
+                               {"metric_micro", h.metric_micro}, {"miner", to_hex(h.miner_id)}});
+    }
     p2p_->broadcast({{"type", "block"}, {"block", block_to_json(b)}});
   }
 }
@@ -261,7 +291,10 @@ void Node::on_message(int peer, const json& msg) {
     {
       std::lock_guard lock(mu_);
       ours = chain_->height();
+      peer_ids_[peer] = msg.value("node_id", std::string("?"));
     }
+    events_->publish("peer", {{"peer", peer}, {"node_id", msg.value("node_id", std::string("?"))},
+                              {"height", msg.at("height")}});
     if (msg.at("height").get<uint64_t>() > ours) {
       p2p_->send(peer, {{"type", "get_blocks"}, {"from_height", ours + 1}});
     }
@@ -290,7 +323,7 @@ void Node::on_message(int peer, const json& msg) {
 }
 
 std::optional<std::string> Node::validate(const Block& b, const Block& parent,
-                                          std::string& detail) {
+                                          std::string& detail, json& checks) {
   if (auto err = check_structure(b, parent, task_)) return "structure: " + *err;
 
   // Механізм B: q переходів, обраних приватним генератором валідатора.
@@ -320,6 +353,8 @@ std::optional<std::string> Node::validate(const Block& b, const Block& parent,
     }
     detail += " B[j=" + std::to_string(j) + " d=" + fmt_double(res->at("distance").get<double>()) +
               " thr=" + fmt_double(res->at("threshold").get<double>()) + "]";
+    checks.push_back({{"mech", "B"}, {"j", j}, {"distance", res->at("distance")},
+                      {"threshold", res->at("threshold")}, {"verdict", res->at("verdict")}});
     if (res->at("verdict") != "accept") return "B: transition " + std::to_string(j) + " failed";
   }
 
@@ -334,6 +369,8 @@ std::optional<std::string> Node::validate(const Block& b, const Block& parent,
       return "A: worker error: " + (res ? res->value("error", std::string("?")) : "cancelled");
     }
     detail += " A[measured=" + std::to_string(res->at("measured").get<double>()) + "]";
+    checks.push_back({{"mech", "A"}, {"measured", res->at("measured")}, {"claimed", res->at("claimed")},
+                      {"verdict", res->at("verdict")}});
     if (res->at("verdict") != "accept") return "A: claimed metric not reproduced";
   }
   return std::nullopt;
@@ -357,6 +394,9 @@ void Node::validator_loop() {
         ++rejected_count_;
         log("REJECT h=" + std::to_string(in.block.header.height) + " hash=" + short_hex(h) +
             ": parent was rejected");
+        events_->publish("verdict", {{"height", in.block.header.height}, {"hash", to_hex(h)},
+                                     {"miner", to_hex(in.block.header.miner_id)}, {"accepted", false},
+                                     {"reason", "parent was rejected"}, {"checks", json::array()}});
         persist();
         continue;
       }
@@ -371,8 +411,9 @@ void Node::validator_loop() {
     }
 
     std::string detail;
+    json checks = json::array();
     auto t0 = Clock::now();
-    auto reason = validate(in.block, parent, detail);
+    auto reason = validate(in.block, parent, detail, checks);
     double secs = std::chrono::duration<double>(Clock::now() - t0).count();
 
     std::string what = "h=" + std::to_string(in.block.header.height) + " hash=" + short_hex(h) +
@@ -380,16 +421,29 @@ void Node::validator_loop() {
     {
       std::lock_guard lock(mu_);
       validating_ = false;
+      json verdict = {{"height", in.block.header.height}, {"hash", to_hex(h)},
+                      {"miner", to_hex(in.block.header.miner_id)}, {"accepted", !reason},
+                      {"reason", reason ? *reason : ""}, {"checks", checks}, {"seconds", secs},
+                      {"metric_micro", in.block.header.metric_micro}};
       if (reason) {
         rejected_.insert(h);
         ++rejected_count_;
         log("REJECT " + what + ": " + *reason + detail);
+        events_->publish("verdict", verdict);
       } else {
         bool new_tip = chain_->add(in.block);
         ++accepted_;
         if (new_tip) tip_changed_ = true;
         log("ACCEPT " + what + detail + " (" + std::to_string(secs).substr(0, 4) + "s)" +
             (new_tip ? "" : " [side branch]"));
+        verdict["new_tip"] = new_tip;
+        events_->publish("verdict", verdict);
+        if (new_tip) {
+          const Block& t = chain_->tip();
+          events_->publish("tip", {{"height", t.header.height}, {"hash", to_hex(t.hash())},
+                                   {"metric_micro", t.header.metric_micro},
+                                   {"miner", to_hex(t.header.miner_id)}});
+        }
       }
       // Діти цього блоку тепер можна обробити: або перевірити, або відхилити разом із батьком.
       for (auto it = orphans_.begin(); it != orphans_.end();) {
@@ -406,20 +460,80 @@ void Node::validator_loop() {
   }
 }
 
-void Node::persist() {
-  chain_->save(cfg_.run_dir + "/chain.json");
-  json status = {
+json Node::status_locked() const {
+  json peers = json::array();
+  for (const auto& [peer, id] : peer_ids_) peers.push_back({{"peer", peer}, {"node_id", id}});
+  const Block& tip = chain_->tip();
+  return {
       {"id", cfg_.id},
-      {"lazy", cfg_.lazy},
+      {"miner_id", to_hex(miner_id_)},
+      {"lazy", lazy_mode_.load()},
+      {"paused", paused_.load()},
       {"height", chain_->height()},
-      {"tip", to_hex(chain_->tip().hash())},
+      {"tip", to_hex(tip.hash())},
+      {"tip_metric_micro", tip.header.metric_micro},
       {"mined", mined_},
       {"accepted", accepted_},
       {"rejected", rejected_count_},
       {"lost_races", lost_races_},
+      {"device", cfg_.device},
+      {"q", cfg_.q},
+      {"alpha", cfg_.alpha},
+      {"verify_a", cfg_.verify_a},
+      {"task", {{"K", task_.K}, {"k", task_.k}, {"dataset", task_.dataset}}},
+      {"peers", peers},
+      {"last_event", events_->last_seq()},
   };
+}
+
+json Node::status() {
+  std::lock_guard lock(mu_);
+  return status_locked();
+}
+
+json Node::chain_from(uint64_t from_height) {
+  std::lock_guard lock(mu_);
+  json blocks = json::array();
+  for (const auto& b : chain_->best_from(from_height)) {
+    json j = block_to_json(b);
+    j["hash"] = to_hex(b.hash());
+    blocks.push_back(std::move(j));
+  }
+  return {{"height", chain_->height()}, {"blocks", blocks}};
+}
+
+std::optional<json> Node::block_json(const std::string& hash_hex) {
+  std::lock_guard lock(mu_);
+  const Block* b = chain_->get(hash_from_hex(hash_hex));
+  if (!b) return std::nullopt;
+  json j = block_to_json(*b);
+  j["hash"] = hash_hex;
+  return j;
+}
+
+json Node::admin(const json& request) {
+  if (request.contains("mode")) {
+    const std::string mode = request.at("mode").get<std::string>();
+    if (mode != "honest" && mode != "lazy") return {{"error", "mode must be honest or lazy"}};
+    lazy_mode_ = mode == "lazy";
+    tip_changed_ = true;  // перервати поточний раунд, щоб новий режим діяв одразу
+    log(std::string("mode switched to ") + (lazy_mode_ ? "LAZY" : "honest"));
+  }
+  if (request.contains("paused")) {
+    paused_ = request.at("paused").get<bool>();
+    tip_changed_ = true;
+    log(paused_ ? "mining paused" : "mining resumed");
+  }
+  events_->publish("mode", {{"lazy", lazy_mode_.load()}, {"paused", paused_.load()}});
+  std::lock_guard lock(mu_);
+  persist();
+  return status_locked();
+}
+
+void Node::persist() {
+  chain_->save(cfg_.run_dir + "/chain.json");
   std::string tmp = cfg_.run_dir + "/status.json.tmp";
-  std::ofstream(tmp) << status.dump(2) << '\n';
+  std::ofstream(tmp) << status_locked().dump(2) << '\n';
   std::filesystem::rename(tmp, cfg_.run_dir + "/status.json");
 }
 

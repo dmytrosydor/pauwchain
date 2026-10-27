@@ -2,7 +2,9 @@
 # Локальна мережа: 3 сумлінні вузли (+ 1 лінивий атакувальник) на MNIST.
 # Використання: scripts/demo.sh            — до висоти 5, з лінивим вузлом
 #               HEIGHT=8 LAZY=0 scripts/demo.sh
-# Змінні: HEIGHT (5), LAZY (1), TIMEOUT секунд (300), PYTHON (.venv/bin/python), K (600), k (50).
+#               HEIGHT=0 scripts/demo.sh — мережа працює, доки не натиснути Ctrl-C (для pouwtop)
+# Змінні: HEIGHT (5), LAZY (1), TIMEOUT секунд (300), PYTHON (.venv/bin/python), K (200), k (20).
+# API вузла i — http://127.0.0.1:$((9200 + i)); дивитися: .venv/bin/python -m tui
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -10,10 +12,11 @@ HEIGHT=${HEIGHT:-5}
 LAZY=${LAZY:-1}
 TIMEOUT=${TIMEOUT:-300}
 PYTHON=${PYTHON:-.venv/bin/python}
-K=${K:-600}
-k=${k:-50}
+K=${K:-200}
+k=${k:-20}
 DEMO=build/demo
 BASE_PORT=9100
+API_PORT=9200
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null
 cmake --build build -j --target node >/dev/null
@@ -46,10 +49,18 @@ for i in "${ids[@]}"; do
   [ "$i" = 4 ] && extra=(--lazy)
   build/node --id "$i" --port $((BASE_PORT + i)) --peers "$(peers_of "$i")" \
     --task "$DEMO/task.json" --store "$DEMO/store" --run-dir "$DEMO/node-$i" \
-    --python "$PYTHON" --max-height "$HEIGHT" ${extra[@]+"${extra[@]}"} >"$DEMO/node-$i.log" 2>&1 &
+    --python "$PYTHON" --max-height "$HEIGHT" --api-port $((API_PORT + i)) \
+    ${extra[@]+"${extra[@]}"} >"$DEMO/node-$i.log" 2>&1 &
   pids+=($!)
 done
 echo "started nodes ${ids[*]} (K=$K, k=$k, target height $HEIGHT, lazy=$LAZY), logs in $DEMO/"
+echo "API: $(for i in "${ids[@]}"; do printf 'http://127.0.0.1:%s ' $((API_PORT + i)); done)"
+
+if [ "$HEIGHT" = 0 ]; then
+  echo "running until Ctrl-C; in another terminal: .venv/bin/python -m tui"
+  wait
+  exit 0
+fi
 
 # Чекаємо, доки всі сумлінні вузли дійдуть до цільової висоти й зійдуться на одній вершині.
 converged() {
