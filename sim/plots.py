@@ -31,6 +31,21 @@ plt.rcParams.update({
 })
 
 
+def _std(xs):
+    if len(xs) < 2:
+        return 0.0
+    m = sum(xs) / len(xs)
+    return (sum((x - m) ** 2 for x in xs) / (len(xs) - 1)) ** 0.5
+
+
+def _mean_by_round(rows):
+    """Середня точність по раундах серед повторів (seed)."""
+    by_round = defaultdict(list)
+    for r in rows:
+        by_round[int(r["round"])].append(float(r["accuracy"]))
+    return [sum(by_round[k]) / len(by_round[k]) for k in sorted(by_round)]
+
+
 def accuracy(run_dir: str) -> str:
     with open(os.path.join(run_dir, "summary.json")) as f:
         summary = json.load(f)
@@ -129,10 +144,15 @@ def e3(run_dir: str) -> str:
                                   "e3_wins.png")):
         fig, ax = plt.subplots(figsize=(7.5, 3.6))
         for i, sc in enumerate(scenarios):
-            pts = sorted((float(r["fraction"]), float(r[metric])) for r in rows if r["scenario"] == sc)
-            xs, ys = [p[0] * 100 for p in pts], [p[1] for p in pts]
-            ax.plot(xs, ys, color=SERIES[i % 7], lw=2, ls=LINESTYLES[i % 7], marker=MARKERS[i % 7], ms=5,
-                    label=sc)
+            by_frac = defaultdict(list)
+            for r in rows:
+                if r["scenario"] == sc:
+                    by_frac[float(r["fraction"])].append(float(r[metric]))
+            xs = sorted(by_frac)
+            ys = [sum(by_frac[x]) / len(by_frac[x]) for x in xs]
+            err = [_std(by_frac[x]) for x in xs]
+            ax.errorbar([x * 100 for x in xs], ys, yerr=err if any(err) else None, color=SERIES[i % 7], lw=2,
+                        ls=LINESTYLES[i % 7], marker=MARKERS[i % 7], ms=5, capsize=3, label=sc)
         ax.set_xlabel("частка зловмисних вузлів, %")
         ax.set_ylabel(label)
         ax.set_ylim(-0.03, 1.03)
@@ -177,12 +197,12 @@ def e5(run_dir: str) -> str:
     mechs = [m for m in dict.fromkeys(g[0] for g in groups) if m != "none"]
     fig, axes = plt.subplots(1, len(mechs), figsize=(4.2 * len(mechs), 3.6), sharey=True)
     axes = axes if len(mechs) > 1 else [axes]
-    base = [float(r["accuracy"]) for r in rows if r["mechanism"] == "none"]
+    base = _mean_by_round([r for r in rows if r["mechanism"] == "none"])
     for ax, m in zip(axes, mechs):
         if base:
             ax.plot(range(1, len(base) + 1), base, color=INK2, lw=1.5, ls="--", label="без атак")
         for i, (gm, a) in enumerate(g for g in groups if g[0] == m):
-            ys = [float(r["accuracy"]) for r in rows if r["mechanism"] == gm and r["alpha"] == a]
+            ys = _mean_by_round([r for r in rows if r["mechanism"] == gm and r["alpha"] == a])
             ax.plot(range(1, len(ys) + 1), ys, color=SERIES[i % 5], lw=2, marker=MARKERS[i % 5], ms=3,
                     label=f"α = {float(a):g}")
         ax.set_title(f"механізм {m}", color=INK, fontsize=10)

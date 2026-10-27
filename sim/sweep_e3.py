@@ -34,38 +34,43 @@ def main() -> None:
     ap.add_argument("--rounds", type=int, default=10)
     ap.add_argument("--scenarios", default=",".join(s["name"] for s in SCENARIOS))
     ap.add_argument("--max-validators", type=int, default=3)
+    ap.add_argument("--seeds", default="0", help="повтори: seed симуляції і task_seed = 42 + seed")
+    ap.add_argument("--dataset", default="mnist")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
     write_manifest(args.out, vars(args))
     chosen = [s for s in SCENARIOS if s["name"] in args.scenarios.split(",")]
     per_round, finals = [], []
-    for sc in chosen:
-        for frac in [float(f) for f in args.fractions.split(",")]:
-            n_bad = round(frac * args.nodes)
-            cfg = Config(name=f"{sc['name']}_{int(frac * 100)}", rounds=args.rounds,
-                         n_honest=args.nodes - n_bad, attackers=[dict(sc["attack"]) for _ in range(n_bad)],
-                         mechanism=sc["mechanism"], max_validators=args.max_validators, baseline=False,
-                         verify_all=False)
-            print(f"== {cfg.name}", flush=True)
-            res = simulate(cfg)
-            rep = report(cfg, res)
-            bad_wins = sum(v for k, v in rep["wins"].items() if k not in ("honest", "none"))
-            finals.append({"scenario": sc["name"], "mechanism": sc["mechanism"], "fraction": frac,
-                           "final_accuracy": rep["final_accuracy"],
-                           "attacker_win_share": round(bad_wins / args.rounds, 3),
-                           "honest_rejected_share": rep["rejected_share"].get("honest", 0.0),
-                           "verify_overhead": rep["verify_overhead"],
-                           "useful_work_share": rep["useful_work_share"]})
-            for r in res["rounds"]:
-                per_round.append({"scenario": sc["name"], "fraction": frac, **r})
+    for seed in [int(x) for x in args.seeds.split(",")]:
+        for sc in chosen:
+            for frac in [float(f) for f in args.fractions.split(",")]:
+                n_bad = round(frac * args.nodes)
+                cfg = Config(name=f"{sc['name']}_{int(frac * 100)}_s{seed}", dataset=args.dataset,
+                             rounds=args.rounds, n_honest=args.nodes - n_bad,
+                             attackers=[dict(sc["attack"]) for _ in range(n_bad)], mechanism=sc["mechanism"],
+                             max_validators=args.max_validators, seed=seed, task_seed=42 + seed,
+                             baseline=False, verify_all=False)
+                print(f"== {cfg.name}", flush=True)
+                res = simulate(cfg)
+                rep = report(cfg, res)
+                bad_wins = sum(v for k, v in rep["wins"].items() if k not in ("honest", "none"))
+                accs = [r["accuracy"] for r in res["rounds"]]
+                finals.append({"seed": seed, "scenario": sc["name"], "mechanism": sc["mechanism"], "fraction": frac,
+                               "final_accuracy": rep["final_accuracy"], "min_accuracy": min(accs),
+                               "attacker_win_share": round(bad_wins / args.rounds, 3),
+                               "honest_rejected_share": rep["rejected_share"].get("honest", 0.0),
+                               "verify_overhead": rep["verify_overhead"],
+                               "useful_work_share": rep["useful_work_share"]})
+                for r in res["rounds"]:
+                    per_round.append({"seed": seed, "scenario": sc["name"], "fraction": frac, **r})
 
     for name, rows in (("final.csv", finals), ("rounds.csv", per_round)):
         with open(os.path.join(args.out, name), "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=list(rows[0]))
             w.writeheader()
             w.writerows(rows)
-    base = centralized(Config(rounds=args.rounds), load_dataset("mnist"))
+    base = centralized(Config(rounds=args.rounds), load_dataset(args.dataset))
     with open(os.path.join(args.out, "baseline.json"), "w") as f:
         json.dump({"baseline": base, "config": vars(args)}, f, indent=2)
     for x in finals:
