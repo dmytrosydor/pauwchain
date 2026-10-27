@@ -1,0 +1,1 @@
+{"name": "kt1_lazy", "rounds": 10, "n_honest": 3, "attackers": [{"kind": "lazy"}], "mechanism": "B"}

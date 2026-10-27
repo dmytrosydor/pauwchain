@@ -30,6 +30,15 @@ uv venv --python 3.12 .venv && uv pip install torch torchvision safetensors nump
 .venv/bin/python worker/worker.py task.json   # формати task.json — docs/contract.md
 ```
 
+Симулятор мережі в одному процесі (`sim/`): атаки 1–5, механізми A, B, C, D, перегони за блок,
+порівняння з централізованим навчанням.
+
+```sh
+.venv/bin/python -m sim.simulator --config experiments/configs/kt1_lazy.json   # раунди → experiments/runs/<name>/
+.venv/bin/python -m sim.matrix --out experiments/runs/e2 --trials 5            # матриця атака × механізм (E2)
+.venv/bin/python -m sim.plots accuracy experiments/runs/kt1_lazy                # графіки
+```
+
 Головна контрольна точка: **1 листопада 2026** — три вузли, навчання на MNIST, механізм верифікації B,
 одна атака і перші цифри.
 

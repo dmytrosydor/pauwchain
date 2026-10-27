@@ -1,0 +1,4 @@
+{"name": "kt1_all_attacks_b", "rounds": 10, "n_honest": 3,
+ "attackers": [{"kind": "lazy"}, {"kind": "plagiarism"}, {"kind": "partial", "frac": 0.1},
+               {"kind": "poison", "p": 1.0}, {"kind": "spoof_tiny"}, {"kind": "spoof_tolerance"}],
+ "mechanism": "B"}
