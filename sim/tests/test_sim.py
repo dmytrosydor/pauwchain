@@ -61,7 +61,7 @@ def test_b_catches_partial_and_one_jump_when_q_covers_all():
 def test_one_jump_passes_b_when_jump_not_sampled():
     blk = attacks.one_jump(TASK, W0, ME, SEED, jump_at=0)
     rng = random.Random(0)
-    # Перевіряємо лише переходи 1..m−1: стрибок у переході 0 не видно.
+    # Check only transitions 1..m−1: a jump in transition 0 is not visible.
     from sim.mechanisms import mech_b
     import sim.mechanisms as mech
     original = mech.pick_transitions
@@ -84,7 +84,7 @@ def test_c_accepts_honest_rejects_lazy():
 
 
 def test_c_plagiarism_without_commit_reveal_passes():
-    # Без commit-reveal копія чужої репліки збігається з чесним результатом — C її не відрізнить.
+    # Without commit-reveal a copy of another replica equals the honest result, so C cannot tell them apart.
     clear_replica_cache()
     assert not verdict("plagiarism", "C", seed_mode="task")
 
@@ -119,7 +119,7 @@ def test_simulator_lazy_never_wins(monkeypatch):
 
 
 def test_simulator_verifies_late_candidates(monkeypatch):
-    # plagiarism приходить після чесного блоку; з verify_all його все одно перевіряють для статистики.
+    # plagiarism arrives after the honest block; with verify_all it is still verified for the statistics.
     monkeypatch.setattr("sim.simulator.load_dataset", lambda name: DS)
     cfg = Config(rounds=1, n_honest=2, attackers=[{"kind": "plagiarism"}], K=20, k=10, baseline=False)
     rep = report(cfg, simulate(cfg))

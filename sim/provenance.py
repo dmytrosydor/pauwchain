@@ -1,4 +1,4 @@
-"""Маніфест прогону: з якого коду, на якому середовищі й з якими параметрами отримано результати."""
+"""Run manifest: which code, environment and parameters produced the results."""
 import hashlib
 import json
 import os

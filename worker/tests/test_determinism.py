@@ -1,5 +1,5 @@
-"""Детермінізм між процесами: той самий блок у різних процесах і з різною кількістю потоків CPU
-має давати побітово однакові ваги. Саме на цьому тримається перевірка B на одному пристрої."""
+"""Cross-process determinism: the same block in different processes and with different CPU thread counts
+must give bitwise identical weights. Check B on a single device relies on exactly this."""
 import os
 import subprocess
 import sys

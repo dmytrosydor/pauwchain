@@ -37,7 +37,7 @@ static Task test_task() {
   return t;
 }
 
-// Чесний на вигляд дочірній блок: m+1 точок, C₀ = w_end батька.
+// Honest-looking child block: m+1 checkpoints, C₀ = parent's w_end.
 static Block child_of(const Block& parent, uint8_t salt) {
   Block b;
   Header& h = b.header;
@@ -74,7 +74,7 @@ static void test_golden(const std::string& path) {
   CHECK(header_to_json(h) == g.at("header"));
 }
 
-// Спільні з Python вектори (scripts/gen_vectors.py): байти заголовка, хеш блоку, ckpt_root.
+// Vectors shared with Python (scripts/gen_vectors.py): header bytes, block hash, ckpt_root.
 static void test_vectors(const std::string& path) {
   std::ifstream in(path);
   CHECK(static_cast<bool>(in));
@@ -93,7 +93,7 @@ static void test_vectors(const std::string& path) {
   }
 }
 
-// Вершина не залежить від порядку, у якому вузол отримав блоки дерева.
+// The tip does not depend on the order in which the node received the tree's blocks.
 static void test_chain_order_independent() {
   Task t = test_task();
   Block g = make_genesis(t, h_of(0x33));
@@ -117,7 +117,7 @@ static void test_chain_order_independent() {
     std::vector<Block> shuffled = blocks;
     std::shuffle(shuffled.begin(), shuffled.end(), rng);
     Chain c(g);
-    // Блок із невідомим батьком Chain не приймає (виняток); вузол дотягує батька і доставляє повторно.
+    // Chain rejects a block with an unknown parent (throws); the node fetches the parent and redelivers.
     for (int pass = 0; pass < 4; ++pass)
       for (const auto& b : shuffled) {
         try {
@@ -148,7 +148,7 @@ static void test_structure() {
   CHECK(check_structure(bad, g, t).has_value());
 
   bad = c;
-  bad.ckpt_hashes[2] = h_of(0x77);  // точку підмінили, корінь лишився старим
+  bad.ckpt_hashes[2] = h_of(0x77);  // checkpoint swapped, root left unchanged
   CHECK(check_structure(bad, g, t).has_value());
 
   bad = c;
@@ -159,7 +159,7 @@ static void test_structure() {
   bad.header.height = 5;
   CHECK(check_structure(bad, g, t).has_value());
 
-  // Поле "hash" з мережі не довіряється.
+  // The "hash" field from the network is not trusted.
   json j = block_to_json(c);
   j["hash"] = to_hex(h_of(0));
   CHECK(block_from_json(j).hash() == c.hash());
@@ -171,7 +171,7 @@ static void test_chain() {
   Block a1 = child_of(chain.genesis(), 0x40);
   Block b1 = child_of(chain.genesis(), 0x50);
   CHECK(chain.add(a1));
-  chain.add(b1);  // рівна висота: перемагає менший хеш, незалежно від порядку
+  chain.add(b1);  // equal height: the smaller hash wins, regardless of order
   Hash smaller = std::min(a1.hash(), b1.hash());
   CHECK(chain.tip().hash() == smaller);
   Chain reversed(make_genesis(t, h_of(0x33)));
@@ -179,7 +179,7 @@ static void test_chain() {
   reversed.add(a1);
   CHECK(reversed.tip().hash() == smaller);
   Block b2 = child_of(b1, 0x60);
-  CHECK(chain.add(b2));  // гілка b стала довшою — реорганізація
+  CHECK(chain.add(b2));  // branch b got longer: reorg
   CHECK(chain.tip().hash() == b2.hash());
   auto best = chain.best_chain();
   CHECK(best.size() == 3 && best[1].hash() == b1.hash());
@@ -190,7 +190,7 @@ static void test_chain() {
   Chain restored(make_genesis(t, h_of(0x33)));
   CHECK(restored.load(path) == 2);
   CHECK(restored.tip().hash() == b2.hash());
-  Chain other(make_genesis(t, h_of(0x34)));  // інший генезис — файл ігнорується
+  Chain other(make_genesis(t, h_of(0x34)));  // different genesis: the file is ignored
   CHECK(other.load(path) == 0);
   std::filesystem::remove(path);
 }
@@ -199,7 +199,7 @@ static void test_event_bus() {
   auto path = (std::filesystem::temp_directory_path() / "pouw_events_test.jsonl").string();
   std::filesystem::remove(path);
   EventBus bus(path);
-  CHECK(bus.wait_after(0, 10).empty());  // тайм-аут без подій
+  CHECK(bus.wait_after(0, 10).empty());  // timeout with no events
   bus.publish("tip", {{"height", 1}});
   bus.publish("tip", {{"height", 2}});
   auto evs = bus.wait_after(1, 10);
@@ -208,7 +208,7 @@ static void test_event_bus() {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     bus.publish("mined", json::object());
   });
-  auto woke = bus.wait_after(2, 2000);  // будиться подією, а не тайм-аутом
+  auto woke = bus.wait_after(2, 2000);  // woken by an event, not by the timeout
   late.join();
   CHECK(woke.size() == 1 && woke[0].at("type") == "mined");
   std::ifstream in(path);

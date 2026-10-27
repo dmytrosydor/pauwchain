@@ -1,4 +1,4 @@
-"""Інтерфейс без справжньої мережі: клієнт підмінено заглушкою."""
+"""The UI without a real network: the client is replaced by a stub."""
 import asyncio
 import threading
 
@@ -46,10 +46,10 @@ def test_tables_log_and_toggle(monkeypatch):
         async with app.run_test(size=(140, 40)) as pilot:
             await pilot.pause(1.0)
             nodes = app.query_one("#nodes", DataTable)
-            assert [str(c) for c in nodes.get_row_at(0)][:4] == ["1", "9201", "сумлінний", "3"]
-            assert str(nodes.get_row_at(1)[2]) == "ЛІНИВИЙ"
+            assert [str(c) for c in nodes.get_row_at(0)][:4] == ["1", "9201", "honest", "3"]
+            assert str(nodes.get_row_at(1)[2]) == "LAZY"
             assert app.query_one("#blocks", DataTable).row_count == 4
-            assert any("відхилив" in line.text for line in app.query_one("#log", RichLog).lines)
+            assert any("rejected" in line.text for line in app.query_one("#log", RichLog).lines)
             await pilot.press("down", "l")
             await pilot.pause(0.5)
             assert app.clients[9204].admin_calls == [{"mode": "honest"}]

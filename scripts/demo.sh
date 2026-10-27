@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Локальна мережа: 3 сумлінні вузли (+ 1 лінивий атакувальник) на MNIST.
-# Використання: scripts/demo.sh            — до висоти 5, з лінивим вузлом
-#               HEIGHT=8 LAZY=0 scripts/demo.sh
-#               HEIGHT=0 scripts/demo.sh — мережа працює, доки не натиснути Ctrl-C (для pouwtop)
-# Змінні: HEIGHT (5), LAZY (1), TIMEOUT секунд (300), PYTHON (.venv/bin/python), K (200), k (20),
-#         WORKER_MODE (server — постійний воркер; spawn — новий процес Python на кожен виклик).
-# API вузла i — http://127.0.0.1:$((9200 + i)); дивитися: .venv/bin/python -m tui
+# Local network: 3 honest nodes (+ 1 lazy attacker) on MNIST.
+# Usage: scripts/demo.sh            — up to height 5, with a lazy node
+#        HEIGHT=8 LAZY=0 scripts/demo.sh
+#        HEIGHT=0 scripts/demo.sh — network runs until Ctrl-C (for pouwtop)
+# Variables: HEIGHT (5), LAZY (1), TIMEOUT seconds (300), PYTHON (.venv/bin/python), K (200), k (20),
+#            WORKER_MODE (server: persistent worker; spawn: a new Python process per call).
+# API of node i: http://127.0.0.1:$((9200 + i)); watch with: .venv/bin/python -m tui
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -28,7 +28,7 @@ mkdir -p "$DEMO"
 cat >"$DEMO/task.json" <<EOF
 {"task_seed": 42, "K": $K, "k": $k, "batch_size": 64, "lr": 0.05, "dataset": "mnist"}
 EOF
-# Генезис-ваги один раз, щоб вузли не писали той самий файл одночасно.
+# Genesis weights once, so nodes don't write the same file concurrently.
 echo '{"op": "genesis", "task_seed": 42, "store_dir": "'"$DEMO"'/store"}' >"$DEMO/genesis.json"
 "$PYTHON" worker/worker.py "$DEMO/genesis.json" >/dev/null
 
@@ -64,7 +64,7 @@ if [ "$HEIGHT" = 0 ]; then
   exit 0
 fi
 
-# Чекаємо, доки всі сумлінні вузли дійдуть до цільової висоти й зійдуться на одній вершині.
+# Wait until all honest nodes reach the target height and converge on one tip.
 converged() {
   "$PYTHON" - "$DEMO" "$HEIGHT" <<'EOF'
 import json, sys

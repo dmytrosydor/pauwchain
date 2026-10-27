@@ -12,18 +12,18 @@
 
 namespace pouw {
 
-// Журнал подій вузла: кожна подія отримує порядковий номер, пишеться в events.jsonl і
-// лишається в пам'яті (останні kKeep) для читачів API, які відстають або підключаються пізніше.
+// Node event log: each event gets a sequence number, is written to events.jsonl and
+// kept in memory (the last kKeep) for API readers that lag behind or connect later.
 class EventBus {
 public:
   static constexpr size_t kKeep = 2000;
 
   explicit EventBus(const std::string& jsonl_path);
 
-  // Додає seq і ts (unix, мілісекунди) і будить читачів.
+  // Adds seq and ts (unix, milliseconds) and wakes readers.
   void publish(const std::string& type, json data);
 
-  // Події з seq > after; чекає до timeout_ms, якщо нових немає. Повертає порожній вектор за тайм-аутом.
+  // Events with seq > after; waits up to timeout_ms if there are none. Returns an empty vector on timeout.
   std::vector<json> wait_after(uint64_t after, int timeout_ms);
   uint64_t last_seq() const;
 

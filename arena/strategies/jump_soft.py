@@ -1,6 +1,6 @@
-"""Адаптивний стрибок: валідатор бере q із m переходів випадково, тож місце стрибка не важить —
-але атакувальник може зробити стрибок меншим (lr_scale 3), щоб навіть спійманий перехід
-виглядав «майже чесним» для порогу α. Перевіряє, чи має B запас на такі атаки."""
+"""Adaptive jump: the validator samples q of m transitions at random, so the jump position does not matter,
+but the attacker can make the jump smaller (lr_scale 3) so that even a checked transition
+looks "almost honest" to the α threshold. Tests whether B has headroom against such attacks."""
 NAME = "jump_soft"
 
 

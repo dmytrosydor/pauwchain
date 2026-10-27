@@ -1,9 +1,9 @@
-"""Експеримент E1: калібрування порогів B і D, FRR між різним залізом, ROC.
+"""Experiment E1: calibrating the B and D thresholds, FRR across different hardware, ROC.
 
-Для кожного стану моделі (після r сумлінних раундів), кожного k і кожного пристрою валідатора
-перераховуємо ВСІ переходи сумлінного блоку та «фальшиві» переходи атак і пишемо:
-- ratio = ‖W_перерах − W_заявл‖ / ‖W_перерах − W_from‖ (механізм B, відносна відстань);
-- cos(ΔW_заявл, −∇L) на перших n_batches батчах переходу (механізм D).
+For every model state (after r honest rounds), every k and every validator device we
+recompute ALL transitions of an honest block and the "fake" transitions of attacks, and record:
+- ratio = ‖W_recomp − W_claimed‖ / ‖W_recomp − W_from‖ (mechanism B, relative distance);
+- cos(ΔW_claimed, −∇L) on the first n_batches batches of the transition (mechanism D).
 
 python -m sim.calibrate --out experiments/runs/e1 --devices cpu,mps --ks 10,20,50 --starts 0,1,2,4,8
 """
@@ -22,7 +22,7 @@ from worker.data import load_dataset
 from worker.train import train_steps
 from worker.verify import flat
 
-# Які переходи атаки фальшиві: для partial — лише ті, що після чесного префікса.
+# Which attack transitions are fake: for partial, only those after the honest prefix.
 ATTACKS = ["lazy", "partial", "spoof_tiny", "spoof_tolerance", "plagiarism", "one_jump"]
 
 
@@ -91,7 +91,7 @@ def main() -> None:
                             rows.append({"k": k, "start_round": r, "miner": mi, "device": dev,
                                          "kind": blk.kind, "j": j, "ratio": ratio, "cos": cos})
             print(f"k={k} start={r} done ({len(rows)} rows)", flush=True)
-            _write(args.out, rows)  # проміжний запис: перерваний прогін не втрачає даних
+            _write(args.out, rows)  # incremental write: an interrupted run loses no data
 
     summary = roc(rows)
     with open(os.path.join(args.out, "summary.json"), "w") as f:

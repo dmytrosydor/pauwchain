@@ -1,4 +1,4 @@
-"""Атака на толерантність (5c): кожна точка зсунута до отруєної моделі на 0,9·α·‖Δ‖ — під порогом B."""
+"""Tolerance attack (5c): each checkpoint is shifted toward a poisoned model by 0.9·α·‖Δ‖, just under B's threshold."""
 from sim.core import add, sub
 from sim.attacks import _norm, _unit
 

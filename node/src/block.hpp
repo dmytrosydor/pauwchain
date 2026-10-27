@@ -15,7 +15,7 @@ using json = nlohmann::json;
 
 inline constexpr size_t kHeaderSize = 236;
 
-// Заголовок блоку, docs/contract.md §2. Поля в порядку серіалізації.
+// Block header, docs/contract.md §2. Fields in serialization order.
 struct Header {
   uint32_t version = 1;
   uint64_t height = 0;
@@ -31,18 +31,18 @@ struct Header {
   uint32_t k = 0;
   int64_t metric_micro = 0;
 
-  std::array<uint8_t, kHeaderSize> serialize() const;  // канонічна little-endian форма
+  std::array<uint8_t, kHeaderSize> serialize() const;  // canonical little-endian form
   Hash hash() const;
 };
 
 struct Block {
   Header header;
-  std::vector<Hash> ckpt_hashes;  // C₀..C_m, лежать у store/<hex>.safetensors
+  std::vector<Hash> ckpt_hashes;  // C₀..C_m, stored in store/<hex>.safetensors
 
   Hash hash() const { return header.hash(); }
 };
 
-// Параметри завдання навчання; однакові в усіх вузлів мережі.
+// Training task parameters; identical on all nodes of the network.
 struct Task {
   Hash task_id{};
   uint64_t task_seed = 0;
@@ -62,10 +62,10 @@ Block block_from_json(const json& j);
 
 Hash ckpt_root_of(const std::vector<Hash>& ckpt_hashes);
 
-// Генезис однаковий на всіх вузлах: висота 0, ваги C₀ = генезис-стан з task_seed.
+// Genesis is identical on all nodes: height 0, weights C₀ = genesis state from task_seed.
 Block make_genesis(const Task& task, const Hash& w0);
 
-// Структурні правила блоку відносно батька. Повертає опис порушення або nullopt.
+// Structural rules of a block relative to its parent. Returns a violation description or nullopt.
 std::optional<std::string> check_structure(const Block& b, const Block& parent, const Task& task);
 
 }  // namespace pouw

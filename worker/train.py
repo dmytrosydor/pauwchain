@@ -11,7 +11,7 @@ State = Dict[str, torch.Tensor]
 
 
 class Cancelled(Exception):
-    """Навчання перервано ззовні (наприклад, вузол отримав нову вершину ланцюга)."""
+    """Training interrupted from outside (e.g. the node received a new chain tip)."""
 
 
 def _cpu_copy(model: torch.nn.Module) -> State:
@@ -30,11 +30,11 @@ def train_steps(
     ckpt_every: Optional[int] = None,
     stop: Optional[Callable[[], bool]] = None,
 ) -> Tuple[State, List[State]]:
-    """Кроки step_from .. step_from+steps−1 звичайного SGD (без моментуму, Р3).
+    """Steps step_from .. step_from+steps−1 of plain SGD (no momentum, D3).
 
-    Повертає кінцевий стан і точки після кожних ckpt_every кроків (якщо задано).
-    Той самий виклик на тому самому пристрої дає побітово ті самі ваги.
-    stop перевіряється перед кожним кроком; якщо повертає True — Cancelled.
+    Returns the final state and checkpoints after every ckpt_every steps (if set).
+    The same call on the same device gives bitwise identical weights.
+    stop is checked before each step; if it returns True, Cancelled is raised.
     """
     model = mnist_cnn()
     model.load_state_dict(state)
@@ -69,7 +69,7 @@ def train_block(
     device: str = "cpu",
     stop: Optional[Callable[[], bool]] = None,
 ) -> List[State]:
-    """Робота майнера в блоці (Р4): K кроків, точки C₀..C_m, m = K/k, C₀ = W_start."""
+    """Miner's work in a block (D4): K steps, checkpoints C₀..C_m, m = K/k, C₀ = W_start."""
     if K % k != 0:
         raise ValueError(f"K={K} must be a multiple of k={k}")
     start = {n: t.detach().cpu().clone() for n, t in w_start.items()}
@@ -78,7 +78,7 @@ def train_block(
 
 
 def ckpt_root(ckpt_hashes: List[bytes]) -> bytes:
-    """SHA-256 від конкатенації хешів точок C₀..C_m (поле заголовка ckpt_root)."""
+    """SHA-256 of the concatenated checkpoint hashes C₀..C_m (header field ckpt_root)."""
     return hashlib.sha256(b"".join(ckpt_hashes)).digest()
 
 
@@ -106,5 +106,5 @@ def accuracy(
 
 
 def to_micro(value: float) -> int:
-    """Fixed-point ×10⁶ для metric_micro у заголовку блоку."""
+    """Fixed-point ×10⁶ for metric_micro in the block header."""
     return round(value * 1_000_000)

@@ -1,9 +1,9 @@
-"""Симулятор раундів мережі в одному процесі (без C++ і TCP).
+"""Single-process simulator of network rounds (no C++ or TCP).
 
-Раунд: усі майнери стартують від вершини ланцюга, блоки приходять у порядку «вартості» роботи
-(лінивий — миттєво, сумлінний — за K кроків), сумлінні вузли перевіряють їх по черзі.
-Перший блок, який не відхилив жоден валідатор, перемагає (В1, перегони). Відхилення одним
-валідатором вважається достатнім: перевірений перехід може повторити будь-хто (fraud proof, Р5).
+Round: all miners start from the chain tip, blocks arrive in order of work "cost"
+(lazy instantly, honest after K steps), and honest nodes verify them in turn.
+The first block that no validator rejects wins (Q1, the race). Rejection by a single
+validator is sufficient: anyone can replay a checked transition (fraud proof, D5).
 
 python -m sim.simulator --config experiments/configs/kt1.json
 """
@@ -32,7 +32,7 @@ class Config:
     dataset: str = "mnist"
     rounds: int = 10
     n_honest: int = 3
-    attackers: List[Dict] = field(default_factory=list)  # [{"kind": "lazy", ...параметри атаки}]
+    attackers: List[Dict] = field(default_factory=list)  # [{"kind": "lazy", ...attack parameters}]
     mechanism: str = "B"
     mech_params: Dict = field(default_factory=dict)
     K: int = 200
@@ -43,20 +43,20 @@ class Config:
     seed: int = 0
     miner_devices: List[str] = field(default_factory=lambda: ["cpu"])
     validator_devices: List[str] = field(default_factory=lambda: ["cpu"])
-    max_validators: int = 0  # 0 — перевіряють усі сумлінні вузли
-    commit_reveal: bool = True  # для C: плагіатор не бачить чужих результатів до свого зобов'язання
-    verify_all: bool = True  # перевіряти й блоки після переможця (лише для статистики виявлення)
+    max_validators: int = 0  # 0 means all honest nodes verify
+    commit_reveal: bool = True  # for C: the plagiarist cannot see others' results before its own commitment
+    verify_all: bool = True  # also verify blocks after the winner (detection statistics only)
     baseline: bool = True
     out_dir: str = "experiments/runs"
 
 
 def arrival(kind: str, cfg: Config, params: Dict) -> float:
-    """Умовний час появи блоку в кроках навчання: хто менше працює, той раніше подає."""
+    """Nominal block arrival time in training steps: whoever works less submits earlier."""
     m = cfg.K // cfg.k
     return {
         "honest": cfg.K,
         "lazy": 0,
-        "plagiarism": cfg.K + 1,  # одразу після першого сумлінного блоку
+        "plagiarism": cfg.K + 1,  # right after the first honest block
         "partial": params.get("frac", 0.1) * cfg.K,
         "poison": cfg.K,
         "spoof_tiny": m,
@@ -90,9 +90,9 @@ def simulate(cfg: Config) -> Dict:
     t0 = time.perf_counter()
 
     for r in range(cfg.rounds):
-        # Швидше залізо (speed > 1) подає ту саму роботу раніше.
+        # Faster hardware (speed > 1) submits the same work earlier.
         order = sorted(nodes, key=lambda n: (arrival(n["kind"], cfg, n["params"]) / n["speed"], rng.random()))
-        # Усі майнери працюють паралельно; їхня робота витрачена, навіть якщо блок програв.
+        # All miners work in parallel; their work is spent even if the block loses.
         totals["miner_steps"] += sum(arrival(n["kind"], cfg, n["params"]) if n["kind"] != "plagiarism" else 0
                                      for n in nodes)
         cache: Dict[int, Block] = {}
@@ -102,12 +102,12 @@ def simulate(cfg: Config) -> Dict:
 
         def block_of(n) -> Block:
             if n["id"] not in cache:
-                # Для C усі виконують те саме завдання з seed завдання (Р8), інакше seed прив'язаний до майнера (Р2).
+                # For C everyone runs the same task with the task seed (D8), otherwise the seed is per miner (D2).
                 seed = block_seed(prev_hash, TASK_ID if replication else n["miner"], r)
                 task = task_for(n["device"])
                 kind, victim = n["kind"], None
                 if kind == "plagiarism" and replication and cfg.commit_reveal:
-                    kind = "lazy"  # до розкриття копіювати нічого
+                    kind = "lazy"  # nothing to copy before the reveal
                 elif kind == "plagiarism":
                     first_honest = next(x for x in order if x["kind"] == "honest")
                     victim = block_of(first_honest)
@@ -132,7 +132,7 @@ def simulate(cfg: Config) -> Dict:
             rejected = any(x.rejected for x in verdicts)
             vsteps = sum(x.cost_steps for x in verdicts)
             if not winner:
-                # Після переможця блоки цієї висоти застарілі: у мережі їх ніхто не перевіряв би.
+                # After the winner, blocks at this height are stale: nobody in the network would verify them.
                 totals["verify_steps"] += vsteps
             cand_rows.append({"round": r, "node": n["id"], "kind": n["kind"], "rejected": int(rejected),
                               "after_winner": int(winner is not None),
@@ -159,7 +159,7 @@ def simulate(cfg: Config) -> Dict:
 
 
 def centralized(cfg: Config, ds) -> List[float]:
-    """Baseline: те саме навчання в одному місці, R·K кроків з одним seed, точність після кожних K."""
+    """Baseline: the same training in one place, R·K steps with one seed, accuracy after every K."""
     state, out = init_state(cfg.task_seed), []
     for r in range(cfg.rounds):
         state, _ = train_steps(state, ds, cfg.task_seed, r * cfg.K, cfg.K, cfg.batch_size, cfg.lr)

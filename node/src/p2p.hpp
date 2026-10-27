@@ -11,8 +11,8 @@
 
 namespace pouw {
 
-// TCP-обмін повідомленнями. Кадр: 4 байти довжини (big-endian, мережевий порядок) + JSON у UTF-8.
-// Один потік на з'єднання. Вихідні з'єднання перепідключаються самі.
+// TCP message exchange. Frame: 4-byte length (big-endian, network order) + UTF-8 JSON.
+// One thread per connection. Outgoing connections reconnect on their own.
 class P2P {
 public:
   using OnMessage = std::function<void(int peer, const json& msg)>;
@@ -35,7 +35,7 @@ private:
   };
 
   void accept_loop();
-  void serve(int fd);  // читає кадри, доки з'єднання живе
+  void serve(int fd);  // reads frames while the connection is alive
   int add_peer(int fd);
   void remove_peer(int id);
 

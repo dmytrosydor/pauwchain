@@ -2,18 +2,18 @@ BasedOnStyle: Google
 Language: Cpp
 Standard: c++20
 
-# Відступи узгоджені з конфігом Neovim (2 пробіли)
+# Indentation matches the Neovim config (2 spaces)
 IndentWidth: 2
 TabWidth: 2
 UseTab: Never
 
-# Читабельність коду
+# Readability
 ColumnLimit: 100
 AccessModifierOffset: -2
 IncludeBlocks: Regroup
 SortIncludes: CaseSensitive
 
-# Сучасний C++ вигляд
+# Modern C++ style
 AllowShortFunctionsOnASingleLine: Inline
 AllowShortLambdasOnASingleLine: All
 FixNamespaceComments: true

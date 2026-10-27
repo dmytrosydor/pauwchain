@@ -100,7 +100,7 @@ WorkerBridge::WorkerBridge(std::string python, std::string server_script, std::s
   server_pid_ = spawn_logged(args, log_path);
   if (server_pid_ < 0) throw std::runtime_error("cannot start worker server " + script_);
 
-  // Чекаємо, доки сервер почне приймати з'єднання (імпорт torch і завантаження даних — секунди).
+  // Wait until the server accepts connections (importing torch and loading data takes seconds).
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
   for (;;) {
     int fd = connect_unix(socket_path_);
@@ -142,7 +142,7 @@ std::optional<json> WorkerBridge::run_socket(const json& task, const std::atomic
     close(fd);
     return json{{"ok", false}, {"error", "worker server write failed"}};
   }
-  // Чекаємо відповідь; скасування — просто закрити з'єднання, сервер зупинить навчання.
+  // Wait for the reply; to cancel, just close the connection and the server stops training.
   pollfd p{fd, POLLIN, 0};
   for (;;) {
     if (cancel && cancel->load()) {

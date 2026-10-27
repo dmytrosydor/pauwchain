@@ -6,8 +6,8 @@ select = ["E", "F", "W", "B"]
 ignore = ["E731", "B905"]
 
 [lint.per-file-ignores]
-"docs/research/probes/*" = ["E", "F", "B"]  # одноразові скрипти вимірювань, збережені як є
+"docs/research/probes/*" = ["E", "F", "B"]  # one-off measurement scripts, kept as is
 "scripts/gen_vectors.py" = ["E402"]
 "worker/worker.py" = ["E402"]
 "worker/server.py" = ["E402"]
-"sim/simulator.py" = ["B023"]  # замикання block_of викликається лише в межах свого раунду
+"sim/simulator.py" = ["B023"]  # the block_of closure is only called within its own round

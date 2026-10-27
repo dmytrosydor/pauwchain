@@ -1,7 +1,7 @@
-"""pouwtop: вузли, ланцюг, перевірки й точність моделі наживо.
+"""pouwtop: nodes, chain, verifications and model accuracy, live.
 
-Клавіші: ↑/↓ — вибрати вузол, l — перемкнути лінивий режим (атака 1), p — пауза майнінгу,
-c — очистити журнал, q — вихід.
+Keys: ↑/↓ select a node, l toggles lazy mode (attack 1), p pauses mining,
+c clears the log, q quits.
 """
 import threading
 import time
@@ -16,14 +16,14 @@ from textual.widgets import DataTable, Footer, Header, RichLog, Sparkline, Stati
 from tui.client import NodeClient
 from tui.view import describe, short, who
 
-QUIET = {"tip"}  # події, які оновлюють панелі, але не пишуться в журнал
-COLUMNS = [("вузол", 6), ("API", 6), ("режим", 12), ("висота", 7), ("вершина", 10), ("знайшов", 8),
-           ("прийняв", 8), ("відхилив", 9), ("програв", 8), ("піри", 5)]
+QUIET = {"tip"}  # events that refresh panels but are not written to the log
+COLUMNS = [("node", 6), ("API", 6), ("mode", 10), ("height", 7), ("tip", 10), ("mined", 7),
+           ("accepted", 9), ("rejected", 9), ("lost", 6), ("peers", 6)]
 
 
 class Pouwtop(App):
     TITLE = "pouwtop"
-    SUB_TITLE = "мережа, що навчає модель"
+    SUB_TITLE = "a blockchain that trains a model"
     CSS = """
     #nodes { height: 8; }
     #middle { height: 1fr; }
@@ -34,17 +34,17 @@ class Pouwtop(App):
     .title { color: $text-muted; }
     """
     BINDINGS = [
-        ("l", "toggle_lazy", "лінивий режим"),
-        ("p", "toggle_pause", "пауза"),
-        ("c", "clear_log", "очистити журнал"),
-        ("q", "quit", "вихід"),
+        ("l", "toggle_lazy", "lazy mode"),
+        ("p", "toggle_pause", "pause"),
+        ("c", "clear_log", "clear log"),
+        ("q", "quit", "quit"),
     ]
 
     def __init__(self, ports: List[int]):
         super().__init__()
         self.clients = {p: NodeClient(p) for p in ports}
         self.statuses: Dict[int, dict] = {}
-        self.names: Dict[str, str] = {}  # miner_id → id вузла
+        self.names: Dict[str, str] = {}  # miner_id → node id
         self.stopping = threading.Event()
 
     def compose(self) -> ComposeResult:
@@ -52,10 +52,10 @@ class Pouwtop(App):
         yield DataTable(id="nodes", cursor_type="row", zebra_stripes=True)
         with Horizontal(id="middle"):
             with Vertical(id="blocks-box"):
-                yield Static("Ланцюг вибраного вузла", classes="title")
+                yield Static("Chain of the selected node", classes="title")
                 yield DataTable(id="blocks", zebra_stripes=True)
             with Vertical(id="acc-box"):
-                yield Static("Точність моделі по блоках", id="acc-label", classes="title")
+                yield Static("Model accuracy per block", id="acc-label", classes="title")
                 yield Sparkline([], id="acc")
         yield RichLog(id="log", markup=True, wrap=True, max_lines=2000)
         yield Footer()
@@ -65,7 +65,7 @@ class Pouwtop(App):
         for col, width in COLUMNS:
             nodes.add_column(col, key=col, width=width)
         blocks = self.query_one("#blocks", DataTable)
-        for col, width in (("висота", 7), ("хеш", 10), ("майнер", 12), ("точність", 10)):
+        for col, width in (("height", 7), ("hash", 10), ("miner", 12), ("accuracy", 10)):
             blocks.add_column(col, key=col, width=width)
         for port in self.clients:
             nodes.add_row(*["…"] * 10, key=str(port))
@@ -76,7 +76,7 @@ class Pouwtop(App):
     def on_unmount(self) -> None:
         self.stopping.set()
 
-    # --- дані -------------------------------------------------------------------------------
+    # --- data ---------------------------------------------------------------------------------
 
     @work(thread=True)
     def poll_status(self) -> None:
@@ -89,7 +89,7 @@ class Pouwtop(App):
 
     @work(thread=True)
     def follow(self, port: int) -> None:
-        """Потік подій вузла; при обриві перепідключається й продовжує з останнього seq."""
+        """Event stream of a node; reconnects on failure and resumes from the last seq."""
         client, last = self.clients[port], 0
         while not self.stopping.is_set():
             try:
@@ -108,7 +108,7 @@ class Pouwtop(App):
             return
         self.call_from_thread(self.show_chain, port, chain)
 
-    # --- відображення -----------------------------------------------------------------------
+    # --- display ------------------------------------------------------------------------------
 
     def selected_port(self) -> int:
         table = self.query_one("#nodes", DataTable)
@@ -118,13 +118,13 @@ class Pouwtop(App):
     def show_status(self, port: int, st) -> None:
         table = self.query_one("#nodes", DataTable)
         if st is None:
-            row = ["?", str(port), Text("недоступний", style="red")] + ["-"] * 7
+            row = ["?", str(port), Text("unreachable", style="red")] + ["-"] * 7
         else:
             self.names[st["miner_id"]] = st["id"]
-            mode = Text("ЛІНИВИЙ", style="bold yellow") if st["lazy"] else Text("сумлінний")
+            mode = Text("LAZY", style="bold yellow") if st["lazy"] else Text("honest")
             if st.get("paused"):
                 mode.append(" ⏸")
-            # Пара вузлів з'єднана в обидва боки, тож рахуємо різні node_id, а не з'єднання.
+            # Two nodes are connected both ways, so count distinct node_ids, not connections.
             peers = len({p["node_id"] for p in st["peers"]})
             row = [st["id"], str(port), mode, str(st["height"]), short(st["tip"]), str(st["mined"]),
                    str(st["accepted"]), str(st["rejected"]), str(st["lost_races"]), str(peers)]
@@ -144,11 +144,11 @@ class Pouwtop(App):
         for b in reversed(blocks[-200:]):
             h = b["header"]
             acc = f"{h['metric_micro'] / 1e4:.2f} %" if h["height"] else "—"
-            miner = who(h["miner_id"], self.names) if h["height"] else "генезис"
+            miner = who(h["miner_id"], self.names) if h["height"] else "genesis"
             table.add_row(str(h["height"]), short(b["hash"]), miner, acc)
         accs = [b["header"]["metric_micro"] / 1e4 for b in blocks if b["header"]["height"]]
         self.query_one("#acc", Sparkline).data = accs or [0]
-        label = f"Точність моделі по блоках: {accs[-1]:.2f} %" if accs else "Точність моделі по блоках"
+        label = f"Model accuracy per block: {accs[-1]:.2f} %" if accs else "Model accuracy per block"
         self.query_one("#acc-label", Static).update(label)
 
     def on_node_event(self, port: int, ev: dict) -> None:
@@ -156,7 +156,7 @@ class Pouwtop(App):
         node = st["id"] if st else str(port)
         if ev["type"] not in QUIET:
             stamp = time.strftime("%H:%M:%S", time.localtime(ev["ts"] / 1000))
-            self.query_one("#log", RichLog).write(f"[dim]{stamp}[/] [b]вузол {node}[/]  {describe(ev, self.names)}")
+            self.query_one("#log", RichLog).write(f"[dim]{stamp}[/] [b]node {node}[/]  {describe(ev, self.names)}")
         if ev["type"] == "tip" and port == self.selected_port():
             self.load_chain(port)
 
@@ -164,14 +164,14 @@ class Pouwtop(App):
         if event.data_table.id == "nodes" and event.row_key is not None:
             self.load_chain(int(event.row_key.value))
 
-    # --- дії --------------------------------------------------------------------------------
+    # --- actions ------------------------------------------------------------------------------
 
     @work(thread=True)
     def admin(self, port: int, **request) -> None:
         try:
             self.clients[port].admin(**request)
         except (OSError, RuntimeError) as e:
-            self.call_from_thread(self.query_one("#log", RichLog).write, f"[red]помилка: {e}[/]")
+            self.call_from_thread(self.query_one("#log", RichLog).write, f"[red]error: {e}[/]")
         self.poll_status()
 
     def action_toggle_lazy(self) -> None:

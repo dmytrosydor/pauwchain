@@ -44,7 +44,7 @@ def block_header_bytes(header: dict) -> bytes:
         bytes.fromhex(header["ckpt_root"]),
         struct.pack("<I", header["K"]),
         struct.pack("<I", header["k"]),
-        struct.pack("<q", header["metric_micro"]),  # знакова 64-бітна ціла: <q
+        struct.pack("<q", header["metric_micro"]),  # signed 64-bit integer: <q
     ]
     raw = b"".join(parts)
     if len(raw) != 236:

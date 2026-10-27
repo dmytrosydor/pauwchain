@@ -1,8 +1,8 @@
-"""Механізми верифікації A, B, C, D, R у вигляді, зручному для симулятора й експериментів.
+"""Verification mechanisms A, B, C, D, R in a form convenient for the simulator and experiments.
 
-Кожен механізм повертає Verdict: чи відхилено блок, скільки кроків навчання-еквівалента
-витратив валідатор і скільки секунд це зайняло. Валідатор бачить лише блок (точки, seed,
-заявлену метрику) і вершину ланцюга; тип атаки йому невідомий.
+Each mechanism returns a Verdict: whether the block was rejected, how many training-step equivalents
+the validator spent, and how many seconds it took. The validator sees only the block (checkpoints, seed,
+claimed metric) and the chain tip; the attack type is unknown to it.
 """
 import itertools
 import random
@@ -19,8 +19,8 @@ from worker.model import mnist_cnn
 from worker.train import train_block
 from worker.verify import flat, pick_transitions, verify_a, verify_b
 
-# Відкалібровано в E1 (k = 20, CPU ↔ MPS): найбільша відносна похибка чесного вузла 0,0084,
-# FRR = 0 при α = 0,05. Для k = 50 запас менший — див. docs/strategy.md, розділ 10.
+# Calibrated in E1 (k = 20, CPU <-> MPS): the largest relative error of an honest node is 0.0084,
+# FRR = 0 at α = 0.05. For k = 50 the margin is smaller, see docs/strategy.md, section 10.
 DEFAULT_ALPHA = 0.05
 
 
@@ -36,15 +36,15 @@ def _structural(task: Task, blk: Block, w_start: State) -> Optional[str]:
     if len(blk.ckpts) != task.m + 1:
         return "wrong checkpoint count"
     if canonical_weight_hash(blk.w_start) != canonical_weight_hash(w_start):
-        return "w_start does not match chain tip"  # Р1
+        return "w_start does not match chain tip"  # D1
     return None
 
 
 def mech_a(task: Task, blk: Block, w_start: State, rng: random.Random, subset: int = 2000,
            eps: float = 0.02, prev_metric_micro: Optional[int] = None,
            min_gain: Optional[float] = None) -> Verdict:
-    """A (Р9): заявлена метрика збігається з виміряною на випадковій валідаційній підвибірці в межах ε;
-    модель не гірша за вершину ланцюга більше ніж на ε; за min_gain — ще й покращилась щонайменше на min_gain.
+    """A (D9): the claimed metric matches the one measured on a random validation subset within ε;
+    the model is not worse than the chain tip by more than ε; with min_gain it must also improve by at least min_gain.
     """
     t0 = time.perf_counter()
     bad = _structural(task, blk, w_start)
@@ -58,7 +58,7 @@ def mech_a(task: Task, blk: Block, w_start: State, rng: random.Random, subset: i
             rejected = True
         if min_gain is not None and r["measured"] < prev + min_gain:
             rejected = True
-    # Прямий прохід ≈ 1/3 кроку навчання на тому самому обсязі даних.
+    # A forward pass is ≈ 1/3 of a training step on the same amount of data.
     cost = subset / task.batch_size / 3
     return Verdict(rejected, cost, time.perf_counter() - t0, r)
 
@@ -74,13 +74,14 @@ def _mean_pairwise_cos(vectors: List[torch.Tensor]) -> Optional[float]:
 def mech_b(task: Task, blk: Block, w_start: State, rng: random.Random, q: int = 2,
            alpha: float = DEFAULT_ALPHA, delta: Optional[float] = None,
            residual_tau: Optional[float] = None) -> Verdict:
-    """B (Р5, Р6): перерахунок q приватно обраних переходів.
+    """B (D5, D6): recompute q privately chosen transitions.
 
-    Поріг відносний: ‖W_перерах − W_заявл‖ ≤ α·‖W_перерах − W_from‖; якщо задано delta — абсолютний
-    (delta = 0 — точний збіг, «B-exact»).
-    residual_tau вмикає тест напрямку залишків (механізм R): у чесного вузла залишки r_j = W_заявл − W_перерах
-    — це шум обчислень і між переходами майже некорельовані; атакувальник, що зсуває кожну точку в межах
-    порогу в одному напрямку, дає співнапрямлені залишки. Відхилити, якщо середній попарний cos > residual_tau.
+    The threshold is relative: ‖W_recomp − W_claimed‖ ≤ α·‖W_recomp − W_from‖; if delta is given it is absolute
+    (delta = 0 means exact match, "B-exact").
+    residual_tau enables the residual-direction test (mechanism R): for an honest node the residuals
+    r_j = W_claimed − W_recomp are compute noise and nearly uncorrelated across transitions; an attacker who shifts
+    every checkpoint within the threshold in one direction produces co-directional residuals.
+    Reject if the mean pairwise cos > residual_tau.
     """
     rule = {"kind": "absolute", "delta": delta} if delta is not None else {"kind": "relative", "alpha": alpha}
     t0 = time.perf_counter()
@@ -107,8 +108,8 @@ _replicas: Dict = {}
 
 
 def _replica_end(task: Task, w_start: State, seed: int):
-    """W_end чесної репліки. На одному пристрої результат побітово однаковий, тому кеш точний;
-    час обчислення зберігається, щоб вартість у секундах лишалась чесною."""
+    """W_end of an honest replica. On a single device the result is bitwise identical, so the cache is exact;
+    the compute time is stored so the cost in seconds stays honest."""
     key = (canonical_weight_hash(w_start), seed, task.device, task.K, task.k, task.lr, task.batch_size)
     if key not in _replicas:
         t0 = time.perf_counter()
@@ -124,12 +125,12 @@ def clear_replica_cache() -> None:
 
 def mech_c(task: Task, blk: Block, w_start: State, replicas: int = 3, alpha: float = DEFAULT_ALPHA,
            replica_devices: Optional[List[str]] = None) -> Verdict:
-    """C (Р8): реплікація. n−1 інших вузлів виконують те саме завдання з тим самим seed завдання;
-    W_end заявника порівнюється з поелементною медіаною всіх n результатів (разом із заявленим),
-    поріг α·‖W_медіана − W_start‖. Репліки можуть рахувати на різних пристроях (replica_devices).
+    """C (D8): replication. n−1 other nodes run the same task with the same task seed;
+    the claimant's W_end is compared with the element-wise median of all n results (including the claimed one),
+    threshold α·‖W_median − W_start‖. Replicas may run on different devices (replica_devices).
 
-    Блок для C має бути побудований із seed завдання — це забезпечує той, хто генерує блоки
-    (sim.matrix / sim.simulator), бо від правила seed залежить, що атакувальник може скопіювати.
+    A block for C must be built from the task seed. The block generator (sim.matrix / sim.simulator)
+    ensures this, because the seed rule determines what an attacker can copy.
     """
     if replicas % 2 == 0:
         raise ValueError("replicas must be odd so the median is a real middle value")
@@ -167,13 +168,13 @@ def _grad(state: State, task: Task, seed: int, steps: List[int]) -> torch.Tensor
 
 
 def _params_flat(state: State) -> torch.Tensor:
-    # state_dict mnist_cnn містить лише параметри, тож порядок збігається з named_parameters.
+    # The mnist_cnn state_dict holds only parameters, so the order matches named_parameters.
     return flat(state)
 
 
 def mech_d(task: Task, blk: Block, w_start: State, rng: random.Random, q: int = 2,
            n_batches: int = 4, tau: float = 0.1) -> Verdict:
-    """D (Р10): cos(ΔW_заявл, −∇L) на перших n_batches призначених батчах переходу ≥ τ."""
+    """D (D10): cos(ΔW_claimed, −∇L) on the first n_batches assigned batches of a transition ≥ τ."""
     t0 = time.perf_counter()
     bad = _structural(task, blk, w_start)
     if bad:
@@ -210,8 +211,8 @@ def _one(name: str, task: Task, blk: Block, w_start: State, rng: random.Random, 
 
 def run(name: str, task: Task, blk: Block, w_start: State, rng: random.Random,
         params: Optional[Dict] = None) -> Verdict:
-    """name — один механізм ("B") або комбінація через «+» ("B+D", "A+R"); params — за літерою механізму.
-    Комбінацію відхилено, якщо відхилив хоч один складник."""
+    """name is one mechanism ("B") or a "+"-joined combination ("B+D", "A+R"); params are keyed by letter.
+    A combination rejects if any of its parts rejects."""
     params = params or {}
     parts = [_one(n, task, blk, w_start, rng, params) for n in name.split("+")]
     if len(parts) == 1:

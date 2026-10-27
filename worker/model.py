@@ -4,7 +4,7 @@ import torch.nn as nn
 
 
 def mnist_cnn() -> nn.Module:
-    # Без dropout і batchnorm (Р3): перехід між точками залежить лише від ваг і батчів.
+    # No dropout or batchnorm (D3): a transition between checkpoints depends only on weights and batches.
     return nn.Sequential(
         nn.Conv2d(1, 16, 3), nn.ReLU(), nn.MaxPool2d(2),
         nn.Conv2d(16, 32, 3), nn.ReLU(), nn.MaxPool2d(2),
@@ -13,7 +13,7 @@ def mnist_cnn() -> nn.Module:
 
 
 def init_state(task_seed: int) -> Dict[str, torch.Tensor]:
-    """Генезис-стан моделі, детерміновано виведений з task_seed (Р1)."""
+    """Genesis model state, deterministically derived from task_seed (D1)."""
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(task_seed)
         model = mnist_cnn()

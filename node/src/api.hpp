@@ -15,27 +15,27 @@ class Server;
 
 namespace pouw {
 
-// Що API може спитати у вузла. Окремі функції замість посилання на Node: API не знає про його нутрощі.
+// What the API can ask the node. Separate functions instead of a Node reference: the API knows nothing of its internals.
 struct ApiHandlers {
   std::function<json()> status;
   std::function<json(uint64_t from_height)> chain_from;
   std::function<std::optional<json>(const std::string& hash_hex)> block;
-  std::function<json(const json& request)> admin;  // {"mode": "honest"|"lazy"} або {"paused": bool}
+  std::function<json(const json& request)> admin;  // {"mode": "honest"|"lazy"} or {"paused": bool}
   EventBus* events = nullptr;
 };
 
-// HTTP API вузла лише на 127.0.0.1:
-//   GET  /status                 стан вузла
-//   GET  /chain?from=H           найкращий ланцюг від висоти H (за замовчуванням 0)
-//   GET  /block/<hash>           блок за хешем
-//   GET  /events?since=SEQ       потік подій (Server-Sent Events); також заголовок Last-Event-ID
+// Node HTTP API, on 127.0.0.1 only:
+//   GET  /status                 node status
+//   GET  /chain?from=H           best chain from height H (default 0)
+//   GET  /block/<hash>           block by hash
+//   GET  /events?since=SEQ       event stream (Server-Sent Events); also the Last-Event-ID header
 //   POST /admin                  {"mode": "lazy"} / {"mode": "honest"} / {"paused": true}
 class Api {
 public:
   Api(uint16_t port, ApiHandlers handlers);
   ~Api();
 
-  void start();  // окремий потік
+  void start();  // separate thread
   void stop();
 
 private:

@@ -9,7 +9,7 @@ State = Dict[str, torch.Tensor]
 
 
 def save_state(store_dir: str, state: State) -> str:
-    """Кладе ваги в store/<канонічний хеш>.safetensors і повертає хеш у hex."""
+    """Writes weights to store/<canonical hash>.safetensors and returns the hash in hex."""
     state = {k: v.detach().cpu().contiguous() for k, v in state.items()}
     h = canonical_weight_hash(state).hex()
     path = os.path.join(store_dir, f"{h}.safetensors")

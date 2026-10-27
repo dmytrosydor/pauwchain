@@ -1,6 +1,6 @@
-"""Клієнт HTTP API вузла (node/src/api.hpp): JSON-запити й потік подій Server-Sent Events.
+"""Client for the node HTTP API (node/src/api.hpp): JSON requests and the Server-Sent Events stream.
 
-Лише стандартна бібліотека: монітор не тягне залежностей, крім Textual.
+Standard library only: the monitor needs nothing besides Textual.
 """
 import http.client
 import json
@@ -38,7 +38,7 @@ class NodeClient:
         return self._request("POST", "/admin", request)
 
     def events(self, since: int = 0, stop: Callable[[], bool] = lambda: False) -> Iterator[dict]:
-        """Події з seq > since, доки з'єднання живе і stop() не повернув True."""
+        """Events with seq > since, while the connection is alive and stop() has not returned True."""
         conn = http.client.HTTPConnection(self.host, self.port, timeout=30)
         try:
             conn.request("GET", f"/events?since={since}")
@@ -60,8 +60,8 @@ def _lines(resp) -> Iterator[str]:
 
 
 def parse_sse(lines: Iterable[str]) -> Iterator[dict]:
-    """Розбирає потік SSE: кадри розділено порожнім рядком, корисне навантаження — у рядках data:.
-    Коментарі (": keepalive") пропускаються."""
+    """Parses an SSE stream: frames are separated by a blank line, the payload is in data: lines.
+    Comments (": keepalive") are skipped."""
     data: list = []
     for line in lines:
         if line == "":

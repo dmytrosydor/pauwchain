@@ -43,7 +43,7 @@ Hash Header::hash() const { return sha256(serialize()); }
 
 Task task_from_json(const json& j, const std::string& raw_text) {
   Task t;
-  // Без явного task_id ідентифікатором завдання є хеш самого файлу завдання.
+  // Without an explicit task_id, the task id is the hash of the task file itself.
   t.task_id = j.contains("task_id") ? hash_from_hex(j.at("task_id").get<std::string>())
                                     : sha256(raw_text);
   t.task_seed = j.at("task_seed").get<uint64_t>();
@@ -98,7 +98,7 @@ json block_to_json(const Block& b) {
   return {{"hash", to_hex(b.hash())}, {"header", header_to_json(b.header)}, {"ckpt_hashes", ckpts}};
 }
 
-// Поле "hash" з мережі ігнорується: хеш завжди перераховується із заголовка.
+// The "hash" field from the network is ignored: the hash is always recomputed from the header.
 Block block_from_json(const json& j) {
   Block b;
   b.header = header_from_json(j.at("header"));
@@ -132,8 +132,8 @@ std::optional<std::string> check_structure(const Block& b, const Block& parent, 
   if (h.prev_hash != parent.hash()) return "prev_hash does not link to parent";
   if (h.height != parent.header.height + 1) return "height is not parent+1";
   if (h.round != h.height) return "round must equal height";
-  if (h.w_start != parent.header.w_end) return "w_start differs from parent w_end";  // Р1
-  if (h.K != task.K || h.k != task.k) return "K/k differ from task";                 // Р3
+  if (h.w_start != parent.header.w_end) return "w_start differs from parent w_end";  // D1
+  if (h.K != task.K || h.k != task.k) return "K/k differ from task";                 // D3
   if (b.ckpt_hashes.size() != h.K / h.k + 1) return "wrong number of checkpoints";
   if (b.ckpt_hashes.front() != h.w_start) return "C0 differs from w_start";
   if (b.ckpt_hashes.back() != h.w_end) return "C_m differs from w_end";

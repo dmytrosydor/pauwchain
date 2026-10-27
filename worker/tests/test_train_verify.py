@@ -13,7 +13,7 @@ RULE = {"kind": "relative", "alpha": 0.3}
 
 
 def synthetic() -> Dataset:
-    # Синтетичні 28×28 з мітками за фіксованою проєкцією: вчиться, але без завантаження MNIST.
+    # Synthetic 28×28 with labels from a fixed projection: learnable, without downloading MNIST.
     g = torch.Generator().manual_seed(0)
     x = torch.randint(0, 256, (1200, 28, 28), dtype=torch.uint8, generator=g)
     w = torch.randn(28 * 28, 10, generator=g)
@@ -65,7 +65,7 @@ def test_lazy_rejected():
 
 
 def test_plagiarism_rejected():
-    # Чужі точки під своїм miner_id: seed інший, тож перерахунок розходиться.
+    # Someone else's checkpoints under our miner_id: the seed differs, so recomputation diverges.
     ckpts = honest()
     thief_seed = derive_seed(bytes(32), b"\x02" * 32, 0)
     assert check(ckpts, 0, seed=thief_seed)["verdict"] == "reject"

@@ -1,8 +1,8 @@
-"""Експеримент E5: шкода атаки на толерантність (5c) залежно від порогу α.
+"""Experiment E5: damage from the tolerance attack (5c) as a function of the threshold α.
 
-Атакувальники знають α валідатора (адаптивна 5c) і мають удвічі швидше залізо, тож регулярно
-виграють перегони. Для кожного α і механізму (B, R) — точність спільної моделі за раундами
-проти мережі без атакувальників.
+Attackers know the validator's α (adaptive 5c) and have twice-as-fast hardware, so they regularly
+win the race. For every α and mechanism (B, R): the shared model's accuracy over rounds
+versus a network without attackers.
 
 python -m sim.sweep_e5 --out experiments/runs/e5
 """
@@ -25,7 +25,7 @@ def main() -> None:
     ap.add_argument("--rounds", type=int, default=15)
     ap.add_argument("--mix", type=float, default=0.0)
     ap.add_argument("--max-validators", type=int, default=3)
-    ap.add_argument("--seeds", default="0", help="повтори: seed симуляції і task_seed = 42 + seed")
+    ap.add_argument("--seeds", default="0", help="repeats: simulation seed and task_seed = 42 + seed")
     ap.add_argument("--dataset", default="mnist")
     args = ap.parse_args()
 

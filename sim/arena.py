@@ -1,18 +1,18 @@
-"""Арена атак: будь-хто пише свою стратегію обману і перевіряє, чи пройде вона механізми A, B, R, C, D.
+"""Attack arena: anyone writes their own cheating strategy and checks whether it passes mechanisms A, B, R, C, D.
 
-Стратегія — Python-файл у теці стратегій (за замовчуванням arena/strategies/) з двома іменами:
+A strategy is a Python file in the strategies folder (arena/strategies/ by default) defining two names:
 
     NAME = "my_attack"
-    def produce(ctx) -> list:      # точки C₀..C_m, C₀ = ctx.w_start
+    def produce(ctx) -> list:      # checkpoints C₀..C_m, C₀ = ctx.w_start
         ...
 
-Через ctx стратегія бачить усе, що бачив би справжній майнер: стартові ваги, свій seed і порядок даних,
-параметри завдання, а також параметри перевірки (q, α, τ) — тобто атакувальник адаптивний.
-Кожен крок навчання через ctx.honest / ctx.poisoned рахується: так видно, скільки роботи атака зекономила.
-Необов'язково: claim_metric(ctx, w_end) -> int — заявлена точність ×10⁶ (інакше заявляється чесно виміряна).
+Through ctx the strategy sees everything a real miner would: the starting weights, its seed and data order,
+the task parameters, and also the verification parameters (q, α, τ), i.e. the attacker is adaptive.
+Every training step through ctx.honest / ctx.poisoned is counted, which shows how much work the attack saved.
+Optional: claim_metric(ctx, w_end) -> int, the claimed accuracy ×10⁶ (otherwise the honestly measured one is claimed).
 
 python -m sim.arena --trials 3 --out experiments/runs/arena
-Код стратегій виконується у цьому ж процесі: запускайте лише стратегії, яким довіряєте.
+Strategy code runs in this same process: run only strategies you trust.
 """
 import argparse
 import csv
@@ -40,12 +40,12 @@ MECHS = ["A", "B", "R", "C", "D"]
 
 @dataclass
 class Context:
-    """Те, що бачить і може робити стратегія."""
+    """What a strategy can see and do."""
 
     task: Task
     w_start: State
     seed: int
-    verifier: Dict  # параметри перевірки, які атакувальник знає: q, alpha, residual_tau
+    verifier: Dict  # verification parameters known to the attacker: q, alpha, residual_tau
     rng: random.Random
     steps_used: int = 0
     _bad: Dict = field(default_factory=dict)
@@ -63,7 +63,7 @@ class Context:
         return self.task.m
 
     def honest(self, state: State, j: int, steps: Optional[int] = None) -> State:
-        """Чесні кроки переходу j (за замовчуванням усі k), рахуються в steps_used."""
+        """Honest steps of transition j (all k by default), counted in steps_used."""
         n = steps or self.k
         out, _ = train_steps(state, self.task.ds, self.seed, j * self.k, n, self.task.batch_size,
                              self.task.lr, self.task.device)
@@ -71,7 +71,7 @@ class Context:
         return out
 
     def poisoned(self, state: State, j: int, p: float = 1.0, lr_scale: float = 1.0) -> State:
-        """Перехід j на мітках, зіпсованих із часткою p (y → y+1 mod 10), з кроком lr·lr_scale."""
+        """Transition j on labels corrupted with fraction p (y → y+1 mod 10), with learning rate lr·lr_scale."""
         if p not in self._bad:
             self._bad[p] = attacks.flip_labels(self.task.ds, p)
         out, _ = train_steps(state, self._bad[p], self.seed, j * self.k, self.k, self.task.batch_size,
@@ -121,7 +121,7 @@ def play(strategy: Strategy, task: Task, w_start: State, seed: int, verifier: Di
     ctx = Context(task, clone(w_start), seed, verifier, rng)
     try:
         ckpts = strategy.produce(ctx)
-    except Exception as e:  # noqa: BLE001 — помилка в чужій стратегії дискваліфікує її, а не арену
+    except Exception as e:  # noqa: BLE001 — an error in a third-party strategy disqualifies it, not the arena
         return None, ctx, f"{type(e).__name__}: {e}"
     bad = check_shape(ckpts, w_start, task.m)
     if bad:
@@ -141,7 +141,7 @@ def main() -> None:
     ap.add_argument("--task-seeds", default="42")
     ap.add_argument("--starts", default="0,3")
     ap.add_argument("--trials", type=int, default=3)
-    ap.add_argument("--validators", type=int, default=1, help="V незалежних валідаторів на блок")
+    ap.add_argument("--validators", type=int, default=1, help="V independent validators per block")
     ap.add_argument("--q", type=int, default=2)
     ap.add_argument("--alpha", type=float, default=DEFAULT_ALPHA)
     args = ap.parse_args()
@@ -163,7 +163,7 @@ def main() -> None:
             mparams = {**params, "A": {"prev_metric_micro": prev_metric}}
             for trial in range(args.trials):
                 for mech in mechs:
-                    # Для C усі виконують те саме завдання з seed завдання (Р8), для решти seed прив'язаний до майнера.
+                    # For C everyone runs the same task with the task seed (D8), otherwise the seed is per miner.
                     seed = block_seed(prev, TASK_ID if mech == "C" else miner_id(200), r * 100 + trial)
                     honest_end = attacks.honest(task, w_start, miner_id(200), seed).w_end
                     honest_acc = accuracy(honest_end, *test_set(ds))
@@ -213,14 +213,14 @@ def scoreboard(rows, names, mechs) -> Dict:
             dmg = sum(a["damage"]) / len(a["damage"]) if a["damage"] else 0.0
             rate = a["passed"] / a["n"] if a["n"] else 0.0
             board[s][m] = {"pass_rate": rate, "ci": [lo, hi], "work": work, "damage": dmg, "errors": a["errors"],
-                           # Що атакувальник отримує, коли проходить: зекономлену роботу і шкоду моделі.
+                           # What the attacker gains when it passes: saved work and damage to the model.
                            "saved_work": rate * max(0.0, 1 - work), "expected_damage": rate * max(0.0, dmg)}
     return board
 
 
 def print_board(board, mechs) -> None:
-    print("\nчастка блоків, що пройшли перевірку (робота — частка від K, шкода — падіння точності)")
-    print(f"{'стратегія':26s}" + "".join(f"{m:>7s}" for m in mechs) + f"{'робота':>9s}{'шкода':>9s}")
+    print("\nshare of blocks that passed verification (work = fraction of K, damage = accuracy drop)")
+    print(f"{'strategy':26s}" + "".join(f"{m:>7s}" for m in mechs) + f"{'work':>9s}{'damage':>9s}")
     for s, per in board.items():
         any_m = next(iter(per.values()))
         print(f"{s:26s}" + "".join(f"{per[m]['pass_rate']:7.2f}" for m in mechs)

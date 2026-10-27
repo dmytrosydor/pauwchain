@@ -1,4 +1,4 @@
-"""Один стрибок: усі переходи чесні, крім одного випадкового — там отруєння з великим кроком."""
+"""One jump: all transitions are honest except one random one, which is poisoned with a large step."""
 NAME = "one_jump"
 
 

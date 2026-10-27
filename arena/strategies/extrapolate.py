@@ -1,4 +1,4 @@
-"""Часткова робота: два чесні переходи, решта — лінійна екстраполяція їхнього середнього кроку."""
+"""Partial work: two honest transitions, the rest is linear extrapolation of their mean step."""
 from sim.core import add, sub
 
 NAME = "extrapolate"

@@ -18,7 +18,7 @@ namespace pouw {
 
 namespace {
 
-constexpr uint32_t kMaxFrame = 8u << 20;  // ~4000 блоків у відповіді на синхронізацію; більше — від зловмисного піра
+constexpr uint32_t kMaxFrame = 8u << 20;  // ~4000 blocks in a sync reply; anything larger comes from a malicious peer
 
 bool write_all(int fd, const void* data, size_t len) {
   auto* p = static_cast<const uint8_t*>(data);
@@ -99,7 +99,7 @@ void P2P::connect_to(const std::string& host, uint16_t port) {
         int fd = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
         if (fd >= 0 && ::connect(fd, res->ai_addr, res->ai_addrlen) == 0) {
           freeaddrinfo(res);
-          serve(fd);  // повертається після розриву, далі перепідключення
+          serve(fd);  // returns after a disconnect, then reconnects
         } else {
           if (fd >= 0) ::close(fd);
           freeaddrinfo(res);
@@ -155,7 +155,7 @@ void P2P::send(int peer, const json& msg) {
   uint32_t be_len = htonl(static_cast<uint32_t>(payload.size()));
   std::lock_guard lock(p->send_mu);
   if (!write_all(p->fd, &be_len, 4) || !write_all(p->fd, payload.data(), payload.size())) {
-    ::shutdown(p->fd, SHUT_RDWR);  // читач помітить розрив і прибере пір
+    ::shutdown(p->fd, SHUT_RDWR);  // the reader notices the disconnect and removes the peer
   }
 }
 

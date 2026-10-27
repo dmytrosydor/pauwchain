@@ -13,7 +13,7 @@ FetchContent_Declare(
   URL_HASH SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 
-# Лише заголовок picosha2.h; SOURCE_SUBDIR вказує на неіснуючу теку, щоб не збирати їхні приклади.
+# Header-only picosha2.h; SOURCE_SUBDIR points to a nonexistent directory so its examples are not built.
 FetchContent_Declare(
   picosha2
   URL https://github.com/okdshin/PicoSHA2/archive/refs/tags/v1.0.1.tar.gz
@@ -21,7 +21,7 @@ FetchContent_Declare(
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
   SOURCE_SUBDIR none)
 
-# HTTP API вузла: лише заголовок httplib.h, без їхньої збірки.
+# Node HTTP API: header-only httplib.h, without building the library.
 FetchContent_Declare(
   httplib
   URL https://github.com/yhirose/cpp-httplib/archive/refs/tags/v0.18.1.tar.gz

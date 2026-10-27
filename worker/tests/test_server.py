@@ -1,4 +1,4 @@
-"""Постійний воркер через Unix socket: ті самі результати, що й разовий запуск, і скасування задачі."""
+"""Persistent worker over a Unix socket: same results as a one-shot run, and task cancellation."""
 import json
 import os
 import socket
@@ -34,7 +34,7 @@ def request(path: str, task: dict, close_after: float = None):
 
 @pytest.fixture()
 def server():
-    # Короткий шлях: sun_path на macOS обмежено ~104 байтами.
+    # Short path: sun_path on macOS is limited to ~104 bytes.
     d = tempfile.mkdtemp(prefix="pw", dir="/tmp")
     path = os.path.join(d, "w.sock")
     proc = subprocess.Popen([sys.executable, "worker/server.py", "--socket", path, "--preload", "synthetic"],
@@ -84,7 +84,7 @@ def test_closing_connection_cancels_training(server):
                  "prev_block_hash": "00" * 32, "w_start": w0, "K": 200000, "k": 1000, "batch_size": 32,
                  "lr": 0.05, "dataset": "synthetic", "store_dir": store}
     request(path, long_task, close_after=0.5)
-    # Задача на 200 000 кроків має зупинитися за кілька кроків після закриття з'єднання.
+    # A 200,000-step task must stop within a few steps after the connection is closed.
     deadline = time.perf_counter() + 5
     while request(path, {"op": "ping"})["active"] and time.perf_counter() < deadline:
         time.sleep(0.05)

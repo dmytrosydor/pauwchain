@@ -8,8 +8,8 @@
 
 namespace pouw {
 
-// Дерево прийнятих блоків. Найкращий ланцюг — найдовший; за рівної довжини — з меншим хешем
-// вершини. Блоки сюди потрапляють уже перевіреними. Не потокобезпечний.
+// Tree of accepted blocks. The best chain is the longest; on equal length, the one with the smaller
+// tip hash. Blocks arrive here already verified. Not thread-safe.
 class Chain {
 public:
   explicit Chain(Block genesis);
@@ -20,14 +20,14 @@ public:
   const Block& genesis() const { return blocks_.at(genesis_); }
   uint64_t height() const { return tip().header.height; }
 
-  // Додає блок, чий батько вже є. Повертає true, якщо змінилась вершина.
+  // Adds a block whose parent is already present. Returns true if the tip changed.
   bool add(const Block& b);
 
-  std::vector<Block> best_chain() const;  // генезис..вершина
+  std::vector<Block> best_chain() const;  // genesis..tip
   std::vector<Block> best_from(uint64_t height) const;
 
   void save(const std::string& path) const;
-  // Відновлює блоки з файлу, якщо генезис збігається. Повертає кількість доданих.
+  // Restores blocks from a file if the genesis matches. Returns the number added.
   size_t load(const std::string& path);
 
 private:

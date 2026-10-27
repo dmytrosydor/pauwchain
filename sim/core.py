@@ -27,7 +27,7 @@ class Task:
 
 @dataclass
 class Block:
-    """Заявка майнера: точки C₀..C_m і заявлена метрика. kind — для обліку, валідатор його не бачить."""
+    """A miner's claim: checkpoints C₀..C_m and the claimed metric. kind is for bookkeeping, hidden from validators."""
 
     miner_id: bytes
     seed: int
@@ -46,7 +46,7 @@ class Block:
         return self.ckpts[-1]
 
 
-TASK_ID = b"\xee" * 32  # ідентифікатор завдання: від нього seed реплікації C (Р8)
+TASK_ID = b"\xee" * 32  # task identifier: the seed for replication C derives from it (D8)
 
 
 def miner_id(i: int) -> bytes:

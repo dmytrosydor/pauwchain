@@ -1,7 +1,7 @@
-"""Експеримент E3: частка зловмисних вузлів.
+"""Experiment E3: share of malicious nodes.
 
-10 вузлів, частка атакувальників 0–50 %, кілька пар «механізм × атака». Міряємо точність
-спільної моделі за раундами і частку раундів, які виграли атакувальники (= частка нагород).
+10 nodes, 0–50% attackers, several "mechanism × attack" pairs. We measure the shared model's
+accuracy over rounds and the share of rounds won by attackers (= share of rewards).
 
 python -m sim.sweep_e3 --out experiments/runs/e3
 """
@@ -20,7 +20,7 @@ SCENARIOS = [
     {"name": "A_poison30", "mechanism": "A", "attack": {"kind": "poison", "p": 0.3}},
     {"name": "B_poison30", "mechanism": "B", "attack": {"kind": "poison", "p": 0.3}},
     {"name": "B_one_jump", "mechanism": "B", "attack": {"kind": "one_jump"}},
-    # 5c удвічі дорожча за чесну роботу; speed = 2 — атакувальник із удвічі швидшим залізом.
+    # 5c costs twice the honest work; speed = 2 is an attacker with twice-as-fast hardware.
     {"name": "B_spoof_tolerance_x2", "mechanism": "B", "attack": {"kind": "spoof_tolerance", "speed": 2.0}},
     {"name": "R_spoof_tolerance_x2", "mechanism": "R", "attack": {"kind": "spoof_tolerance", "speed": 2.0}},
 ]
@@ -34,7 +34,7 @@ def main() -> None:
     ap.add_argument("--rounds", type=int, default=10)
     ap.add_argument("--scenarios", default=",".join(s["name"] for s in SCENARIOS))
     ap.add_argument("--max-validators", type=int, default=3)
-    ap.add_argument("--seeds", default="0", help="повтори: seed симуляції і task_seed = 42 + seed")
+    ap.add_argument("--seeds", default="0", help="repeats: simulation seed and task_seed = 42 + seed")
     ap.add_argument("--dataset", default="mnist")
     args = ap.parse_args()
 

@@ -11,10 +11,10 @@
 
 namespace pouw {
 
-// Виклик Python-воркера (docs/contract.md §3). Два режими:
-//  - spawn: task.json → `python worker/worker.py task.json` → result.json, окремий процес на виклик;
-//  - server: один постійний `python worker/server.py` на Unix socket (§3.5), запускається в конструкторі.
-//    Python, torch і набір даних завантажуються один раз, тож виклик коштує лише саму роботу.
+// Python worker invocation (docs/contract.md §3). Two modes:
+//  - spawn: task.json → `python worker/worker.py task.json` → result.json, a separate process per call;
+//  - server: one persistent `python worker/server.py` on a Unix socket (§3.5), started in the constructor.
+//    Python, torch and the dataset load once, so a call costs only the work itself.
 class WorkerBridge {
 public:
   WorkerBridge(std::string python, std::string script, std::string work_dir);
@@ -24,8 +24,8 @@ public:
   WorkerBridge(const WorkerBridge&) = delete;
   WorkerBridge& operator=(const WorkerBridge&) = delete;
 
-  // Повертає результат воркера. nullopt — якщо виклик скасовано через cancel.
-  // Помилки воркера приходять як {"ok": false, "error": ...}.
+  // Returns the worker result. nullopt if the call was cancelled via cancel.
+  // Worker errors arrive as {"ok": false, "error": ...}.
   std::optional<json> run(json task, const std::atomic<bool>* cancel = nullptr);
 
 private:
@@ -35,7 +35,7 @@ private:
   std::string python_;
   std::string script_;
   std::string work_dir_;
-  std::string socket_path_;  // порожній — режим spawn
+  std::string socket_path_;  // empty means spawn mode
   pid_t server_pid_ = 0;
   std::atomic<uint64_t> counter_{0};
 };

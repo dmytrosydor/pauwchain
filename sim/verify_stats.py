@@ -1,8 +1,8 @@
-"""Зведення для E1: FRR і частка виявлення на рівні одного переходу як функція порогу."""
+"""E1 summary: per-transition FRR and detection rate as a function of the threshold."""
 from collections import defaultdict
 from typing import Dict, List
 
-# α = 0 — точний збіг (B-exact); логарифмічна сітка до 1, бо чесна похибка ~1e-6…1e-2.
+# α = 0 is an exact match (B-exact); a log grid up to 1, since the honest error is ~1e-6…1e-2.
 ALPHAS = [0, 1e-6, 1e-5, 1e-4, 1e-3, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0]
 TAUS = [-0.2, 0.0, 0.05, 0.1, 0.2, 0.3, 0.4]
 
@@ -16,7 +16,7 @@ def _rates(values: List[float], thresholds, reject_if_above: bool) -> Dict[str, 
 
 
 def roc(rows: List[Dict]) -> Dict:
-    """Для кожного (k, пристрій валідатора): частка відхилених переходів за B (ratio > α) і D (cos < τ)."""
+    """For each (k, validator device): share of transitions rejected by B (ratio > α) and D (cos < τ)."""
     groups = defaultdict(lambda: defaultdict(lambda: {"ratio": [], "cos": []}))
     for r in rows:
         g = groups[f"k={r['k']}/{r['device']}"][r["kind"]]
@@ -34,7 +34,7 @@ def roc(rows: List[Dict]) -> Dict:
 
 
 def wilson(hits: int, n: int, z: float = 1.96):
-    """95 % довірчий інтервал Вільсона для частки hits/n."""
+    """95% Wilson confidence interval for the proportion hits/n."""
     if n == 0:
         return (0.0, 1.0)
     p = hits / n

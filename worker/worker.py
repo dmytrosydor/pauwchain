@@ -1,4 +1,4 @@
-"""Воркер, який викликає вузол: python worker/worker.py <task.json> (docs/contract.md, розділ 3)."""
+"""Worker invoked by the node: python worker/worker.py <task.json> (docs/contract.md, section 3)."""
 import json
 import os
 import random
@@ -60,7 +60,7 @@ def op_verify_b(task: dict, stop=None) -> dict:
 
 def op_verify_a(task: dict, stop=None) -> dict:
     ds = load_dataset(task["dataset"])
-    rng = random.Random(task.get("validator_seed"))  # без seed — приватна випадковість ОС
+    rng = random.Random(task.get("validator_seed"))  # no seed: private OS randomness
     return verify_a(
         load_state(task["store_dir"], task["w_end"]),
         ds, task["metric_micro"], task["subset"], task["eps"], rng,
@@ -72,14 +72,14 @@ OPS = {"genesis": op_genesis, "train": op_train, "verify_b": op_verify_b, "verif
 
 
 def run_task(task: dict, stop=None) -> dict:
-    """Виконує одну операцію; помилки повертаються як {"ok": false, "error": ...}, а не винятком.
-    Спільне для разового запуску (main) і постійного воркера (worker/server.py)."""
+    """Runs one operation; errors are returned as {"ok": false, "error": ...}, not raised.
+    Shared by the one-shot run (main) and the persistent worker (worker/server.py)."""
     t0 = time.perf_counter()
     try:
         result = {"ok": True, **OPS[task["op"]](task, stop=stop)}
     except Cancelled:
         result = {"ok": False, "cancelled": True, "error": "cancelled"}
-    except Exception as e:  # noqa: BLE001 — будь-яка помилка воркера має дійти до вузла як результат
+    except Exception as e:  # noqa: BLE001 — any worker error must reach the node as a result
         result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
     result["seconds"] = round(time.perf_counter() - t0, 3)
     return result

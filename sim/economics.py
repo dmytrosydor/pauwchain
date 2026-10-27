@@ -1,15 +1,15 @@
-"""Економіка обману на основі виміряної матриці E2.
+"""Economics of cheating based on the measured E2 matrix.
 
-Одиниця вартості — K кроків навчання (один сумлінний блок). N майнерів змагаються за блок з нагородою R
-у тих самих одиницях (перегони, В1). Сумлінний майнер виграє в середньому 1/N раундів.
-Атака з вартістю c < 1 подає блок раніше за сумлінних і виграє раунд, якщо її не спіймали (w = 1);
-атака з c ≥ 1 приходить не раніше за сумлінних (w = 1/N).
-  p   = 1 − (1 − p₁)^(V·(1 − s))        p₁ — виявлення одним валідатором (з E2), V валідаторів,
-                                        кожен пропускає перевірку з імовірністю s (дилема верифікатора)
-  очікуваний виграш шахрая  (1 − p)·w·R − c − p·S
-  очікуваний виграш чесного R/N − 1
-  мінімальна застава S* = ((1 − p)·w·R − c − R/N + 1) / p
-S* ≤ 0 — обман невигідний і без застави; p = 0 — жодна застава не допоможе.
+The cost unit is K training steps (one honest block). N miners compete for a block with reward R
+in the same units (the race, Q1). An honest miner wins 1/N of the rounds on average.
+An attack with cost c < 1 submits before the honest miners and wins the round if not caught (w = 1);
+an attack with c ≥ 1 arrives no earlier than the honest miners (w = 1/N).
+  p   = 1 − (1 − p₁)^(V·(1 − s))        p₁ is detection by one validator (from E2), V validators,
+                                        each skips verification with probability s (verifier's dilemma)
+  expected cheater payoff  (1 − p)·w·R − c − p·S
+  expected honest payoff   R/N − 1
+  minimum stake S* = ((1 − p)·w·R − c − R/N + 1) / p
+S* ≤ 0: cheating does not pay even without a stake; p = 0: no stake will help.
 
 python -m sim.economics experiments/runs/e2 [N] [R]
 """

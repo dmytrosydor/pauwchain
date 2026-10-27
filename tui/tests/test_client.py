@@ -20,7 +20,7 @@ def test_describe_verdict_names_miner_and_checks():
                                       "checks": [{"mech": "B", "j": 3, "distance": 0.47, "threshold": 0.024,
                                                   "verdict": "reject"}]}}
     text = describe(ev, names)
-    assert "вузол 2" in text and "h=4" in text and "j=3" in text and "0.47" in text
+    assert "node 2" in text and "h=4" in text and "j=3" in text and "0.47" in text
 
 
 def test_short_hash():

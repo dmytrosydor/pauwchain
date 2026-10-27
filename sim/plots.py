@@ -1,4 +1,4 @@
-"""Графіки для розділу 4 з CSV/JSON, які пишуть sim.simulator і sim.matrix.
+"""Figures for chapter 4 from the CSV/JSON written by sim.simulator and sim.matrix.
 
 python -m sim.plots accuracy experiments/runs/kt1_lazy
 python -m sim.plots matrix experiments/runs/e2
@@ -39,7 +39,7 @@ def _std(xs):
 
 
 def _mean_by_round(rows):
-    """Середня точність по раундах серед повторів (seed)."""
+    """Mean accuracy per round across repeats (seeds)."""
     by_round = defaultdict(list)
     for r in rows:
         by_round[int(r["round"])].append(float(r["accuracy"]))
@@ -56,15 +56,15 @@ def accuracy(run_dir: str) -> str:
     base = [summary["acc0"]] + summary["baseline"]
 
     fig, ax = plt.subplots(figsize=(6, 3.4))
-    ax.plot(xs, sim, color=BLUE, lw=2, marker="o", ms=4, label="мережа (PoUW)")
+    ax.plot(xs, sim, color=BLUE, lw=2, marker="o", ms=4, label="network (PoUW)")
     if summary["baseline"]:
-        ax.plot(xs, base, color=ORANGE, lw=2, ls="--", label="централізоване навчання")
+        ax.plot(xs, base, color=ORANGE, lw=2, ls="--", label="centralized training")
         ax.annotate(f"{base[-1]:.3f}", (xs[-1], base[-1]), xytext=(6, 6), textcoords="offset points",
                     color=INK2, fontsize=9)
     ax.annotate(f"{sim[-1]:.3f}", (xs[-1], sim[-1]), xytext=(6, -12), textcoords="offset points",
                 color=INK2, fontsize=9)
-    ax.set_xlabel("раунд (блок)")
-    ax.set_ylabel("точність на тестовому наборі")
+    ax.set_xlabel("round (block)")
+    ax.set_ylabel("test accuracy")
     ax.legend(frameon=False, loc="lower right")
     fig.tight_layout()
     out = os.path.join(run_dir, "accuracy.png")
@@ -94,7 +94,7 @@ def matrix(run_dir: str) -> str:
         for j, v in enumerate(row):
             ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=9,
                     color="white" if v > 0.6 else INK)
-    ax.set_title("частка відхилених блоків (рядок honest — FRR)", color=INK, fontsize=10, loc="left")
+    ax.set_title("share of rejected blocks (honest row = FRR)", color=INK, fontsize=10, loc="left")
     for s in ax.spines.values():
         s.set_visible(False)
     fig.tight_layout()
@@ -104,7 +104,7 @@ def matrix(run_dir: str) -> str:
 
 
 def e1(run_dir: str) -> str:
-    """Розподіл відносної відстані B за типом переходу; вертикальна лінія — поріг α = 0,3."""
+    """Distribution of B's relative distance by transition type; the vertical line is the threshold α = 0.3."""
     with open(os.path.join(run_dir, "transitions.csv")) as f:
         rows = list(csv.DictReader(f))
     ks = sorted({int(r["k"]) for r in rows})
@@ -122,11 +122,11 @@ def e1(run_dir: str) -> str:
         ax.set_xscale("log")
         ax.set_xlim(floor / 2, 10)
         ax.set_title(f"k = {k}", color=INK, fontsize=10)
-        ax.set_xlabel("‖W_перерах − W_заявл‖ / ‖ΔW‖")
+        ax.set_xlabel("‖W_recomp − W_claimed‖ / ‖ΔW‖")
         ax.grid(axis="y", visible=False)
     axes[0].set_yticks(range(len(kinds)), kinds)
-    axes[0].legend(title="валідатор", frameon=False, loc="upper left", fontsize=8, title_fontsize=8)
-    fig.text(0.01, 0.01, f"значення 0 (побітовий збіг) показано як {floor:g}", color=INK2, fontsize=8)
+    axes[0].legend(title="validator", frameon=False, loc="upper left", fontsize=8, title_fontsize=8)
+    fig.text(0.01, 0.01, f"value 0 (bitwise match) shown as {floor:g}", color=INK2, fontsize=8)
     fig.tight_layout(rect=(0, 0.04, 1, 1))
     out = os.path.join(run_dir, "ratio_by_kind.png")
     fig.savefig(out)
@@ -134,13 +134,13 @@ def e1(run_dir: str) -> str:
 
 
 def e3(run_dir: str) -> str:
-    """Точність після останнього раунду і частка виграних атакувальниками раундів від частки атакувальників."""
+    """Accuracy after the last round and share of rounds won by attackers versus the share of attackers."""
     with open(os.path.join(run_dir, "final.csv")) as f:
         rows = list(csv.DictReader(f))
     scenarios = list(dict.fromkeys(r["scenario"] for r in rows))
     outs = []
-    for metric, label, fname in (("final_accuracy", "точність після 10 раундів", "e3_accuracy.png"),
-                                 ("attacker_win_share", "частка раундів, виграних атакувальниками",
+    for metric, label, fname in (("final_accuracy", "accuracy after 10 rounds", "e3_accuracy.png"),
+                                 ("attacker_win_share", "rounds won by attackers",
                                   "e3_wins.png")):
         fig, ax = plt.subplots(figsize=(7.5, 3.6))
         for i, sc in enumerate(scenarios):
@@ -153,7 +153,7 @@ def e3(run_dir: str) -> str:
             err = [_std(by_frac[x]) for x in xs]
             ax.errorbar([x * 100 for x in xs], ys, yerr=err if any(err) else None, color=SERIES[i % 7], lw=2,
                         ls=LINESTYLES[i % 7], marker=MARKERS[i % 7], ms=5, capsize=3, label=sc)
-        ax.set_xlabel("частка зловмисних вузлів, %")
+        ax.set_xlabel("share of malicious nodes, %")
         ax.set_ylabel(label)
         ax.set_ylim(-0.03, 1.03)
         ax.legend(frameon=False, fontsize=8, loc="center left", bbox_to_anchor=(1.01, 0.5))
@@ -165,24 +165,25 @@ def e3(run_dir: str) -> str:
 
 
 def pareto(run_dir: str) -> str:
-    """Механізм як точка: середня частка виявлених атак проти вартості перевірки (частка від K)."""
+    """Each mechanism as a point: mean detection rate versus verification cost (fraction of K)."""
     with open(os.path.join(run_dir, "matrix.csv")) as f:
         rows = list(csv.DictReader(f))
     mechs = list(dict.fromkeys(r["mechanism"] for r in rows))
-    fig, ax = plt.subplots(figsize=(6, 3.8))
+    fig, ax = plt.subplots(figsize=(7, 3.8))
     for i, m in enumerate(mechs):
         mr = [r for r in rows if r["mechanism"] == m]
         att = [int(r["rejected"]) for r in mr if r["kind"] != "honest"]
         frr = [int(r["rejected"]) for r in mr if r["kind"] == "honest"]
         cost = sum(float(r["verify_steps"]) / float(r["K"]) for r in mr) / len(mr)
         det = sum(att) / len(att)
-        ax.scatter([cost], [det], s=60, color=SERIES[i % 6], marker=MARKERS[i % 6], zorder=3)
-        ax.annotate(f"{m}  (FRR {sum(frr) / len(frr):.2f})", (cost, det), xytext=(7, [-12, 8, -12, 8, -12, -16][i % 6]),
-                    textcoords="offset points", color=INK, fontsize=9)
+        # Several mechanisms share a cost, so identity goes to the legend rather than point labels.
+        ax.scatter([cost], [det], s=60, color=SERIES[i % 6], marker=MARKERS[i % 6], zorder=3,
+                   label=f"{m}  (FRR {sum(frr) / len(frr):.2f})")
     ax.set_xscale("log")
-    ax.set_xlabel("вартість перевірки, частка від K (лог. шкала)")
-    ax.set_ylabel("середня частка виявлених атак")
+    ax.set_xlabel("verification cost, fraction of K (log scale)")
+    ax.set_ylabel("mean detection rate")
     ax.set_ylim(0, 1.05)
+    ax.legend(frameon=False, fontsize=8, loc="center left", bbox_to_anchor=(1.01, 0.5))
     fig.tight_layout()
     out = os.path.join(run_dir, "pareto.png")
     fig.savefig(out)
@@ -190,7 +191,7 @@ def pareto(run_dir: str) -> str:
 
 
 def e5(run_dir: str) -> str:
-    """Точність спільної моделі за раундами для кожного α і механізму; пунктир — мережа без атакувальників."""
+    """Shared model accuracy over rounds for each α and mechanism; dashed line is the network without attackers."""
     with open(os.path.join(run_dir, "rounds.csv")) as f:
         rows = list(csv.DictReader(f))
     groups = list(dict.fromkeys((r["mechanism"], r["alpha"]) for r in rows))
@@ -200,15 +201,15 @@ def e5(run_dir: str) -> str:
     base = _mean_by_round([r for r in rows if r["mechanism"] == "none"])
     for ax, m in zip(axes, mechs):
         if base:
-            ax.plot(range(1, len(base) + 1), base, color=INK2, lw=1.5, ls="--", label="без атак")
+            ax.plot(range(1, len(base) + 1), base, color=INK2, lw=1.5, ls="--", label="no attackers")
         for i, (gm, a) in enumerate(g for g in groups if g[0] == m):
             ys = _mean_by_round([r for r in rows if r["mechanism"] == gm and r["alpha"] == a])
             ax.plot(range(1, len(ys) + 1), ys, color=SERIES[i % 5], lw=2, marker=MARKERS[i % 5], ms=3,
                     label=f"α = {float(a):g}")
-        ax.set_title(f"механізм {m}", color=INK, fontsize=10)
-        ax.set_xlabel("раунд")
+        ax.set_title(f"mechanism {m}", color=INK, fontsize=10)
+        ax.set_xlabel("round")
         ax.legend(frameon=False, fontsize=8)
-    axes[0].set_ylabel("точність (тестова половина)")
+    axes[0].set_ylabel("accuracy (test half)")
     fig.tight_layout()
     out = os.path.join(run_dir, "e5_accuracy.png")
     fig.savefig(out)

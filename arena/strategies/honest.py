@@ -1,4 +1,4 @@
-"""Сумлінний майнер — контроль: має проходити все."""
+"""Honest miner, the control: must pass everything."""
 NAME = "honest"
 
 

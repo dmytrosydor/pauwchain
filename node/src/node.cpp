@@ -34,7 +34,7 @@ uint64_t unix_now() {
                                    .count());
 }
 
-// Сон, що переривається зміною вершини.
+// Sleep that is interrupted by a tip change.
 bool sleep_unless(const std::atomic<bool>& flag, double seconds) {
   auto until = Clock::now() + std::chrono::duration<double>(seconds);
   while (Clock::now() < until) {
@@ -101,7 +101,7 @@ Node::Node(Config cfg) : cfg_(std::move(cfg)) {
   miner_id_ = sha256("node-" + cfg_.id);
   std::filesystem::create_directories(cfg_.run_dir);
   if (cfg_.worker_mode == "server") {
-    // Окремі процеси для майнінгу й перевірки: перевірка чужих блоків не чекає на власне навчання.
+    // Separate processes for mining and verification: checking others' blocks does not wait for our own training.
     miner_bridge_ = std::make_unique<WorkerBridge>(cfg_.python, cfg_.worker_server, cfg_.run_dir + "/mine",
                                                    cfg_.run_dir + "/mine.sock", task_.dataset);
     verifier_bridge_ = std::make_unique<WorkerBridge>(cfg_.python, cfg_.worker_server,
@@ -159,7 +159,7 @@ void Node::run() {
   for (const auto& [host, port] : cfg_.peers) p2p_->connect_to(host, port);
   std::thread([this] { validator_loop(); }).detach();
 
-  // Даємо пірам підключитися, щоб усі стартували з одного стану.
+  // Give peers time to connect so everyone starts from the same state.
   auto deadline = Clock::now() + std::chrono::seconds(5);
   while (p2p_->peer_count() < cfg_.peers.size() && Clock::now() < deadline) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -186,8 +186,8 @@ json Node::worker_task(const char* op, const Block& b) const {
 
 void Node::mining_loop() {
   for (;;) {
-    // Спершу дообробити отримані блоки: інакше вузол майнить на застарілій вершині й плодить форки.
-    // Обмеження очікування не дає спаму від атакувальника зупинити майнінг повністю.
+    // Process received blocks first: otherwise the node mines on a stale tip and spawns forks.
+    // The wait limit keeps attacker spam from stalling mining completely.
     auto wait_until = Clock::now() + std::chrono::seconds(20);
     for (;;) {
       {
@@ -223,7 +223,7 @@ void Node::mining_loop() {
 
     if (lazy) {
       if (!sleep_unless(tip_changed_, cfg_.lazy_delay_s)) continue;
-      // Ліниве повторення: жодного кроку навчання, усі точки — копії стартових ваг.
+      // Lazy replay: no training steps, every checkpoint is a copy of the starting weights.
       b.ckpt_hashes.assign(task_.K / task_.k + 1, h.w_start);
       h.w_end = h.w_start;
       h.metric_micro = parent.header.metric_micro;
@@ -260,7 +260,7 @@ void Node::mining_loop() {
         events_->publish("lost_race", {{"height", h.height}});
         continue;
       }
-      // Атакувальник не додає свої блоки собі, а йде за чесним ланцюгом, щоб лишатися в перегонах.
+      // The attacker does not add its own blocks locally; it follows the honest chain to stay in the race.
       if (!lazy) {
         chain_->add(b);
         persist();
@@ -338,7 +338,7 @@ std::optional<std::string> Node::validate(const Block& b, const Block& parent,
                                           std::string& detail, json& checks) {
   if (auto err = check_structure(b, parent, task_)) return "structure: " + *err;
 
-  // Механізм B: q переходів, обраних приватним генератором валідатора.
+  // Mechanism B: q transitions chosen by the validator's private RNG.
   const size_t m = b.header.K / b.header.k;
   std::vector<size_t> all(m);
   for (size_t j = 0; j < m; ++j) all[j] = j;
@@ -346,7 +346,7 @@ std::optional<std::string> Node::validate(const Block& b, const Block& parent,
   std::sample(all.begin(), all.end(), std::back_inserter(picks),
               std::min<size_t>(static_cast<size_t>(cfg_.q), m), rng_);
 
-  // Переходи незалежні, тож перераховуються паралельно, кожен у своєму процесі воркера.
+  // Transitions are independent, so they are recomputed in parallel, each in its own worker process.
   std::vector<std::future<std::optional<json>>> runs;
   for (size_t j : picks) {
     json t = worker_task("verify_b", b);
@@ -457,7 +457,7 @@ void Node::validator_loop() {
                                    {"miner", to_hex(t.header.miner_id)}});
         }
       }
-      // Діти цього блоку тепер можна обробити: або перевірити, або відхилити разом із батьком.
+      // This block's children can now be processed: either verified or rejected along with the parent.
       for (auto it = orphans_.begin(); it != orphans_.end();) {
         if (it->second.block.header.prev_hash == h) {
           inbox_.push_front(std::move(it->second));
@@ -528,7 +528,7 @@ json Node::admin(const json& request) {
     const std::string mode = request.at("mode").get<std::string>();
     if (mode != "honest" && mode != "lazy") return {{"error", "mode must be honest or lazy"}};
     lazy_mode_ = mode == "lazy";
-    tip_changed_ = true;  // перервати поточний раунд, щоб новий режим діяв одразу
+    tip_changed_ = true;  // interrupt the current round so the new mode applies immediately
     log(std::string("mode switched to ") + (lazy_mode_ ? "LAZY" : "honest"));
   }
   if (request.contains("paused")) {

@@ -1,11 +1,11 @@
-"""Постійний воркер: ті самі операції, що й worker.py, але через Unix socket без перезапуску Python.
+"""Persistent worker: the same operations as worker.py, but over a Unix socket without restarting Python.
 
 python worker/server.py --socket run/node-1/verify.sock [--preload mnist]
 
-Протокол (docs/contract.md, розділ 3.5): клієнт відкриває з'єднання, надсилає один кадр
-(4 байти довжини big-endian + JSON завдання) і отримує один кадр з результатом.
-Щоб скасувати задачу, клієнт закриває з'єднання: навчання зупиняється на найближчому кроці.
-Кожне з'єднання обслуговується окремим потоком. Сервер завершується сам, коли зникає батьківський процес.
+Protocol (docs/contract.md, section 3.5): the client opens a connection, sends one frame
+(4-byte big-endian length + task JSON) and receives one frame with the result.
+To cancel a task, the client closes the connection: training stops at the next step.
+Each connection is served by its own thread. The server exits on its own when the parent process goes away.
 """
 import argparse
 import json
@@ -24,7 +24,7 @@ from worker.data import load_dataset
 from worker.worker import run_task
 
 MAX_FRAME = 8 << 20
-_active = 0  # скільки задач виконується зараз; видно через {"op": "ping"}
+_active = 0  # how many tasks are running now; visible via {"op": "ping"}
 _active_lock = threading.Lock()
 
 
@@ -51,7 +51,7 @@ def write_frame(conn: socket.socket, obj: dict) -> None:
 
 
 def watch_for_close(conn: socket.socket, stop: threading.Event, done: threading.Event) -> None:
-    """Поки задача виконується, клієнт нічого не надсилає; EOF на сокеті означає скасування."""
+    """While a task runs, the client sends nothing; EOF on the socket means cancellation."""
     while not done.is_set():
         readable, _, _ = select.select([conn], [], [], 0.05)
         if readable:
@@ -102,7 +102,7 @@ def exit_with_parent(parent: int) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--socket", required=True)
-    ap.add_argument("--preload", default="", help="набір даних, який завантажити заздалегідь")
+    ap.add_argument("--preload", default="", help="dataset to load in advance")
     args = ap.parse_args()
 
     if args.preload:

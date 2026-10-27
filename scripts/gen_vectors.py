@@ -1,6 +1,6 @@
-"""Генерує docs/vectors.json — спільні тестові вектори для Python і C++ (docs/contract.md).
+"""Generates docs/vectors.json, the shared test vectors for Python and C++ (docs/contract.md).
 
-Вектори комітяться; тести обох мов читають той самий файл. Перегенерувати лише при зміні контракту:
+The vectors are committed; tests in both languages read the same file. Regenerate only when the contract changes:
 python scripts/gen_vectors.py
 """
 import hashlib
@@ -64,8 +64,8 @@ def main() -> None:
         {"w": ([0.0, -0.0, 1.0, -1.5], (2, 2))},
         {"b": ([float("nan"), float("inf"), float("-inf")], (3,))},
         {"scalar": ([3.25], ())},
-        {"tiny": ([1e-45, -1e-45, 1.17549435e-38], (3,))},  # денормалізовані й мінімальне нормальне
-        {"z.weight": ([0.5] * 6, (1, 2, 3)), "a.bias": ([2.0, -2.0], (2,))},  # порядок за іменем
+        {"tiny": ([1e-45, -1e-45, 1.17549435e-38], (3,))},  # denormals and the smallest normal
+        {"z.weight": ([0.5] * 6, (1, 2, 3)), "a.bias": ([2.0, -2.0], (2,))},  # ordering by name
     ]
     out["weights"] = []
     for case in cases:

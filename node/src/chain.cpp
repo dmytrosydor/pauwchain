@@ -21,8 +21,8 @@ bool Chain::add(const Block& b) {
   if (contains(h)) return false;
   if (!contains(b.header.prev_hash)) throw std::invalid_argument("parent unknown");
   blocks_.emplace(h, b);
-  // Найдовший ланцюг; за рівної висоти — менший хеш блоку. Однакове правило на всіх вузлах
-  // дає їм зійтися на одній вершині навіть тоді, коли майнери закінчують раунд одночасно.
+  // Longest chain; on equal height, the smaller block hash wins. The same rule on every node
+  // lets them converge on one tip even when miners finish a round at the same time.
   if (b.header.height > height() || (b.header.height == height() && h < tip_)) {
     tip_ = h;
     return true;

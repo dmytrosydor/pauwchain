@@ -1,1 +1,1 @@
-"""pouwtop — термінальний монітор мережі pouwchain поверх HTTP API вузлів."""
+"""pouwtop — a terminal monitor for a pouwchain network, built on the nodes' HTTP API."""

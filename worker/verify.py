@@ -13,7 +13,7 @@ def flat(state: State) -> torch.Tensor:
 
 
 def pick_transitions(m: int, q: int, rng: random.Random) -> List[int]:
-    """Валідатор обирає q із m переходів власним приватним генератором (Р5)."""
+    """The validator picks q of m transitions with its own private RNG (D5)."""
     return sorted(rng.sample(range(m), min(q, m)))
 
 
@@ -30,10 +30,10 @@ def verify_b(
     device: str = "cpu",
     return_residual: bool = False,
 ) -> Dict:
-    """Механізм B: перерахувати k кроків від ckpt_from і порівняти з заявленою ckpt_to.
+    """Mechanism B: recompute k steps from ckpt_from and compare with the claimed ckpt_to.
 
-    distance = ‖W_перерах − W_заявл‖.
-    Поріг (Р6): relative — α·‖W_перерах − W_from‖, absolute — фіксоване δ.
+    distance = ‖W_recomputed − W_claimed‖.
+    Threshold (D6): relative is α·‖W_recomputed − W_from‖, absolute is a fixed δ.
     """
     recomputed, _ = train_steps(ckpt_from, ds, seed, step_from, k, batch_size, lr, device)
     w_rec, w_to = flat(recomputed), flat(ckpt_to)
@@ -55,7 +55,7 @@ def verify_b(
         "update_norm": update,
     }
     if return_residual:
-        out["residual"] = w_to - w_rec  # залишок r_j для тесту напрямку
+        out["residual"] = w_to - w_rec  # residual r_j for the direction test
     return out
 
 
@@ -68,7 +68,7 @@ def verify_a(
     rng: random.Random,
     device: str = "cpu",
 ) -> Dict:
-    """Механізм A: точність на випадковій підвибірці валідаційної частини має бути в межах ε від заявленої (Р9)."""
+    """Mechanism A: accuracy on a random subsample of the validation split must be within ε of the claimed one (D9)."""
     x_val, y_val = val_set(ds)
     n = x_val.shape[0]
     idx = torch.tensor(sorted(rng.sample(range(n), min(subset, n))))

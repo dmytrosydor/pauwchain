@@ -1,5 +1,5 @@
-"""Міжмовний контракт: Python має давати ті самі байти й хеші, що зафіксовані в docs/vectors.json і
-docs/golden.json. Ті самі файли перевіряє C++ (node/tests/test_main.cpp)."""
+"""Cross-language contract: Python must produce the same bytes and hashes as recorded in docs/vectors.json and
+docs/golden.json. C++ checks the same files (node/tests/test_main.cpp)."""
 import hashlib
 import json
 import os

@@ -1,4 +1,4 @@
-"""Атака 1: не тренує, повторює стартові ваги з крихітним шумом."""
+"""Attack 1: does not train, repeats the starting weights with tiny noise."""
 from sim.core import add
 
 NAME = "lazy"

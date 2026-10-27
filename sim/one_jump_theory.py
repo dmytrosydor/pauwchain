@@ -1,8 +1,8 @@
-"""Атака «один стрибок»: теорія проти виміру.
+"""The "one jump" attack: theory versus measurement.
 
-Для кожного блоку перераховуємо ВСІ переходи один раз і знаходимо ті, що не проходять B. Далі
-тисячі разів моделюємо вибір q переходів V валідаторами справжнім pick_transitions і порівнюємо
-частку виявлення з формулою 1 − (1 − q/m)^V.
+For every block we recompute ALL transitions once and find those that fail B. Then we
+simulate thousands of times the choice of q transitions by V validators with the real pick_transitions and compare
+the detection rate with the formula 1 − (1 − q/m)^V.
 
 python -m sim.one_jump_theory --out experiments/runs/one_jump --blocks 20
 """
