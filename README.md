@@ -39,9 +39,6 @@ uv venv --python 3.12 .venv && uv pip install torch torchvision safetensors nump
 .venv/bin/python -m sim.plots accuracy experiments/runs/kt1_lazy                # графіки
 ```
 
-Головна контрольна точка: **1 листопада 2026** — три вузли, навчання на MNIST, механізм верифікації B,
-одна атака і перші цифри.
-
 ## Вузол (C++)
 
 `node/` — мережева частина: заголовок блоку (236 байтів, `docs/contract.md` §2), ланцюг, перевірка блоків,
@@ -70,7 +67,7 @@ HEIGHT=8 LAZY=0 scripts/demo.sh        # лише сумлінні вузли
 
 Результати вузла — у `--run-dir`: `chain.json`, `status.json` і файли завдань воркера.
 
-## Структура, якою вона стане
+## Структура
 
 ```
 node/      C++: блок, ланцюг, валідація, P2P по TCP
