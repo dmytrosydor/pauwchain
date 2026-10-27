@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# Локальна мережа: 3 сумлінні вузли (+ 1 лінивий атакувальник) на MNIST.
+# Використання: scripts/demo.sh            — до висоти 5, з лінивим вузлом
+#               HEIGHT=8 LAZY=0 scripts/demo.sh
+# Змінні: HEIGHT (5), LAZY (1), TIMEOUT секунд (300), PYTHON (.venv/bin/python), K (600), k (50).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+HEIGHT=${HEIGHT:-5}
+LAZY=${LAZY:-1}
+TIMEOUT=${TIMEOUT:-300}
+PYTHON=${PYTHON:-.venv/bin/python}
+K=${K:-600}
+k=${k:-50}
+DEMO=build/demo
+BASE_PORT=9100
+
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null
+cmake --build build -j --target node >/dev/null
+
+rm -rf "$DEMO"
+mkdir -p "$DEMO"
+cat >"$DEMO/task.json" <<EOF
+{"task_seed": 42, "K": $K, "k": $k, "batch_size": 64, "lr": 0.05, "dataset": "mnist"}
+EOF
+# Генезис-ваги один раз, щоб вузли не писали той самий файл одночасно.
+echo '{"op": "genesis", "task_seed": 42, "store_dir": "'"$DEMO"'/store"}' >"$DEMO/genesis.json"
+"$PYTHON" worker/worker.py "$DEMO/genesis.json" >/dev/null
+
+ids=(1 2 3)
+[ "$LAZY" = 1 ] && ids+=(4)
+peers_of() {
+  local me=$1 out=""
+  for j in "${ids[@]}"; do
+    [ "$j" = "$me" ] || out+="127.0.0.1:$((BASE_PORT + j)),"
+  done
+  echo "${out%,}"
+}
+
+pids=()
+cleanup() { [ ${#pids[@]} -gt 0 ] && kill "${pids[@]}" 2>/dev/null; wait 2>/dev/null || true; }
+trap cleanup EXIT
+
+for i in "${ids[@]}"; do
+  extra=()
+  [ "$i" = 4 ] && extra=(--lazy)
+  build/node --id "$i" --port $((BASE_PORT + i)) --peers "$(peers_of "$i")" \
+    --task "$DEMO/task.json" --store "$DEMO/store" --run-dir "$DEMO/node-$i" \
+    --python "$PYTHON" --max-height "$HEIGHT" ${extra[@]+"${extra[@]}"} >"$DEMO/node-$i.log" 2>&1 &
+  pids+=($!)
+done
+echo "started nodes ${ids[*]} (K=$K, k=$k, target height $HEIGHT, lazy=$LAZY), logs in $DEMO/"
+
+# Чекаємо, доки всі сумлінні вузли дійдуть до цільової висоти й зійдуться на одній вершині.
+converged() {
+  "$PYTHON" - "$DEMO" "$HEIGHT" <<'EOF'
+import json, sys
+demo, target = sys.argv[1], int(sys.argv[2])
+try:
+    st = [json.load(open(f"{demo}/node-{i}/status.json")) for i in (1, 2, 3)]
+except (OSError, ValueError):
+    sys.exit(1)
+sys.exit(0 if all(s["height"] >= target for s in st) and len({s["tip"] for s in st}) == 1 else 1)
+EOF
+}
+start=$(date +%s)
+until converged; do
+  if [ $(($(date +%s) - start)) -ge "$TIMEOUT" ]; then echo "timeout after ${TIMEOUT}s"; break; fi
+  sleep 1
+done
+cleanup
+trap - EXIT
+
+echo
+echo "== log excerpt (node 1) =="
+grep -E 'MINED|ACCEPT|REJECT|lost race' "$DEMO/node-1.log" | head -20
+echo
+echo "== summary =="
+"$PYTHON" - "$DEMO" "${ids[@]}" <<'EOF'
+import hashlib, json, sys
+demo, ids = sys.argv[1], sys.argv[2:]
+chains = {}
+for i in ids:
+    s = json.load(open(f"{demo}/node-{i}/status.json"))
+    c = json.load(open(f"{demo}/node-{i}/chain.json"))
+    chains[i] = [b["hash"] for b in c["blocks"]]
+    print(f"node {i}{' (lazy)' if s['lazy'] else '       '}: height={s['height']} tip={s['tip'][:10]} "
+          f"mined={s['mined']} accepted={s['accepted']} rejected={s['rejected']} lost_races={s['lost_races']}")
+honest = [chains[i] for i in ("1", "2", "3")]
+common = min(len(c) for c in honest)
+agree = 0
+while agree < common and len({c[agree] for c in honest}) == 1:
+    agree += 1
+print(f"honest nodes agree on the first {agree} blocks (genesis + {agree - 1}); "
+      f"tips equal: {len({c[-1] for c in honest}) == 1}")
+lazy_id = hashlib.sha256(b"node-4").hexdigest()
+lazy_rejects = sum(1 for i in ("1", "2", "3") for line in open(f"{demo}/node-{i}.log")
+                   if "REJECT" in line and "miner=" + lazy_id[:10] in line)
+if "4" in ids:
+    lazy_in_chains = sum(1 for i in ("1", "2", "3")
+                         for b in json.load(open(f"{demo}/node-{i}/chain.json"))["blocks"]
+                         if b["header"]["miner_id"] == lazy_id)
+    print(f"lazy blocks rejected by honest nodes: {lazy_rejects}; lazy blocks in honest chains: {lazy_in_chains}")
+EOF
