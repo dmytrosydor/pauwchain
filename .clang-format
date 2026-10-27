@@ -1,0 +1,20 @@
+BasedOnStyle: Google
+Language: Cpp
+Standard: c++20
+
+# Відступи узгоджені з конфігом Neovim (2 пробіли)
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+
+# Читабельність коду
+ColumnLimit: 100
+AccessModifierOffset: -2
+IncludeBlocks: Regroup
+SortIncludes: CaseSensitive
+
+# Сучасний C++ вигляд
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortLambdasOnASingleLine: All
+FixNamespaceComments: true
+SpacesBeforeTrailingComments: 2
