@@ -96,7 +96,7 @@ grep -E 'MINED|ACCEPT|REJECT|lost race' "$DEMO/node-1.log" | head -20
 echo
 echo "== summary =="
 "$PYTHON" - "$DEMO" "${ids[@]}" <<'EOF'
-import hashlib, json, sys
+import json, sys
 demo, ids = sys.argv[1], sys.argv[2:]
 chains = {}
 for i in ids:
@@ -105,7 +105,7 @@ for i in ids:
     chains[i] = [b["hash"] for b in c["blocks"]]
     print(f"node {i}{' (lazy)' if s['lazy'] else '       '}: height={s['height']} tip={s['tip'][:10]} "
           f"mined={s['mined']} accepted={s['accepted']} rejected={s['rejected']} lost_races={s['lost_races']} "
-          f"blobs fetched/served={s['blobs_fetched']}/{s['blobs_served']}")
+          f"blobs fetched/served={s['blobs_fetched']}/{s['blobs_served']} balance={s['balance']}")
 honest = [chains[i] for i in ("1", "2", "3")]
 common = min(len(c) for c in honest)
 agree = 0
@@ -113,7 +113,7 @@ while agree < common and len({c[agree] for c in honest}) == 1:
     agree += 1
 print(f"honest nodes agree on the first {agree} blocks (genesis + {agree - 1}); "
       f"tips equal: {len({c[-1] for c in honest}) == 1}")
-lazy_id = hashlib.sha256(b"node-4").hexdigest()
+lazy_id = json.load(open(f"{demo}/node-4/status.json"))["miner_id"] if "4" in ids else ""
 lazy_rejects = sum(1 for i in ("1", "2", "3") for line in open(f"{demo}/node-{i}.log")
                    if "REJECT" in line and "miner=" + lazy_id[:10] in line)
 if "4" in ids:

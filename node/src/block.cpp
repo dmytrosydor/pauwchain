@@ -19,8 +19,8 @@ void put_hash(uint8_t*& p, const Hash& h) {
 
 }  // namespace
 
-std::array<uint8_t, kHeaderSize> Header::serialize() const {
-  std::array<uint8_t, kHeaderSize> out{};
+std::vector<uint8_t> Header::serialize() const {
+  std::vector<uint8_t> out(version >= 2 ? kHeaderSizeV2 : kHeaderSizeV1);
   uint8_t* p = out.data();
   put_le(p, version);
   put_le(p, height);
@@ -35,6 +35,7 @@ std::array<uint8_t, kHeaderSize> Header::serialize() const {
   put_le(p, K);
   put_le(p, k);
   put_le(p, metric_micro);
+  if (version >= 2) put_hash(p, tx_root);
   if (p != out.data() + out.size()) throw std::logic_error("header layout mismatch");
   return out;
 }
@@ -57,7 +58,7 @@ Task task_from_json(const json& j, const std::string& raw_text) {
 }
 
 json header_to_json(const Header& h) {
-  return {
+  json j = {
       {"version", h.version},
       {"height", h.height},
       {"prev_hash", to_hex(h.prev_hash)},
@@ -72,6 +73,8 @@ json header_to_json(const Header& h) {
       {"k", h.k},
       {"metric_micro", h.metric_micro},
   };
+  if (h.version >= 2) j["tx_root"] = to_hex(h.tx_root);
+  return j;
 }
 
 Header header_from_json(const json& j) {
@@ -89,13 +92,17 @@ Header header_from_json(const json& j) {
   h.K = j.at("K").get<uint32_t>();
   h.k = j.at("k").get<uint32_t>();
   h.metric_micro = j.at("metric_micro").get<int64_t>();
+  if (h.version >= 2) h.tx_root = hash_from_hex(j.at("tx_root").get<std::string>());
   return h;
 }
 
 json block_to_json(const Block& b) {
   json ckpts = json::array();
   for (const auto& c : b.ckpt_hashes) ckpts.push_back(to_hex(c));
-  return {{"hash", to_hex(b.hash())}, {"header", header_to_json(b.header)}, {"ckpt_hashes", ckpts}};
+  json txs = json::array();
+  for (const auto& tx : b.txs) txs.push_back(tx_to_json(tx));
+  return {{"hash", to_hex(b.hash())}, {"header", header_to_json(b.header)}, {"ckpt_hashes", ckpts},
+          {"txs", txs}, {"sig", to_hex(b.sig)}};
 }
 
 // The "hash" field from the network is ignored: the hash is always recomputed from the header.
@@ -103,6 +110,11 @@ Block block_from_json(const json& j) {
   Block b;
   b.header = header_from_json(j.at("header"));
   for (const auto& c : j.at("ckpt_hashes")) b.ckpt_hashes.push_back(hash_from_hex(c.get<std::string>()));
+  if (j.contains("txs")) {
+    if (j.at("txs").size() > kMaxTxsPerBlock) throw std::invalid_argument("too many transfers");
+    for (const auto& t : j.at("txs")) b.txs.push_back(tx_from_json(t));
+  }
+  if (j.contains("sig")) b.sig = signature_from_hex(j.at("sig").get<std::string>());
   return b;
 }
 
@@ -122,12 +134,13 @@ Block make_genesis(const Task& task, const Hash& w0) {
   g.header.k = task.k;
   g.ckpt_hashes = {w0};
   g.header.ckpt_root = ckpt_root_of(g.ckpt_hashes);
+  g.header.tx_root = tx_root_of(g.txs);
   return g;
 }
 
 std::optional<std::string> check_structure(const Block& b, const Block& parent, const Task& task) {
   const Header& h = b.header;
-  if (h.version != 1) return "unsupported version";
+  if (h.version != kBlockVersion) return "unsupported version";
   if (h.task_id != task.task_id) return "wrong task_id";
   if (h.prev_hash != parent.hash()) return "prev_hash does not link to parent";
   if (h.height != parent.header.height + 1) return "height is not parent+1";
@@ -139,6 +152,8 @@ std::optional<std::string> check_structure(const Block& b, const Block& parent, 
   if (b.ckpt_hashes.back() != h.w_end) return "C_m differs from w_end";
   if (ckpt_root_of(b.ckpt_hashes) != h.ckpt_root) return "ckpt_root mismatch";
   if (h.metric_micro < 0 || h.metric_micro > 1'000'000) return "metric out of range";
+  if (tx_root_of(b.txs) != h.tx_root) return "tx_root mismatch";
+  if (!verify(h.miner_id, b.hash(), b.sig)) return "bad miner signature";
   return std::nullopt;
 }
 

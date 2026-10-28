@@ -3,12 +3,21 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <stdexcept>
 
 namespace pouw {
 
 Chain::Chain(Block genesis) : genesis_(genesis.hash()), tip_(genesis_) {
   blocks_.emplace(genesis_, std::move(genesis));
+  ledgers_.emplace(genesis_, Ledger{});
+}
+
+std::optional<std::string> Chain::try_apply(const Block& b, Ledger& out) const {
+  auto it = ledgers_.find(b.header.prev_hash);
+  if (it == ledgers_.end()) return "parent unknown";
+  out = it->second;
+  return out.apply(b.txs, b.header.miner_id, genesis().header.task_id);
 }
 
 const Block* Chain::get(const Hash& h) const {
@@ -20,7 +29,10 @@ bool Chain::add(const Block& b) {
   Hash h = b.hash();
   if (contains(h)) return false;
   if (!contains(b.header.prev_hash)) throw std::invalid_argument("parent unknown");
+  Ledger next;
+  if (auto err = try_apply(b, next)) throw std::invalid_argument("ledger: " + *err);
   blocks_.emplace(h, b);
+  ledgers_.emplace(h, std::move(next));
   // Longest chain; on equal height, the smaller block hash wins. The same rule on every node
   // lets them converge on one tip even when miners finish a round at the same time.
   if (b.header.height > height() || (b.header.height == height() && h < tip_)) {
@@ -36,6 +48,14 @@ std::vector<Block> Chain::best_chain() const {
     out.push_back(*b);
   }
   std::reverse(out.begin(), out.end());
+  return out;
+}
+
+std::vector<Block> Chain::abandoned(const Hash& old_tip) const {
+  std::set<Hash> best;
+  for (const auto& b : best_chain()) best.insert(b.hash());
+  std::vector<Block> out;
+  for (const Block* b = get(old_tip); b && !best.count(b->hash()); b = get(b->header.prev_hash)) out.push_back(*b);
   return out;
 }
 
@@ -59,14 +79,23 @@ void Chain::save(const std::string& path) const {
 size_t Chain::load(const std::string& path) {
   std::ifstream in(path);
   if (!in) return 0;
-  json j = json::parse(in);
-  size_t added = 0;
+  json j = json::parse(in, nullptr, false);
+  if (j.is_discarded() || !j.contains("blocks") || j.at("blocks").empty()) {
+    throw std::runtime_error(path + " is not a saved chain");
+  }
   const auto& blocks = j.at("blocks");
-  if (blocks.empty() || block_from_json(blocks.front()).hash() != genesis_) return 0;
+  if (block_from_json(blocks.front()).hash() != genesis_) {
+    throw std::runtime_error(path + " belongs to another network or an older protocol version");
+  }
+  size_t added = 0;
   for (size_t i = 1; i < blocks.size(); ++i) {
-    Block b = block_from_json(blocks[i]);
-    if (!contains(b.header.prev_hash)) break;
-    add(b);
+    try {
+      Block b = block_from_json(blocks[i]);
+      if (!contains(b.header.prev_hash)) break;
+      add(b);
+    } catch (const std::exception&) {
+      break;  // a saved block that no longer parses or applies (edited file): keep the valid prefix
+    }
     ++added;
   }
   return added;

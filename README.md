@@ -65,6 +65,21 @@ docker compose restart            # chains survive restarts
 docker compose down -v            # stop and wipe chains, stores and the dataset
 ```
 
+## Coins and the wallet
+
+Every accepted block pays its miner 50 test coins (no real value) plus the fees of the transfers it carries.
+Accounts are Ed25519 keys; blocks are signed by their miner, and transfers by their sender. `pouw` is the wallet:
+
+```sh
+build/pouw new                                   # create ~/.pouw/wallet.key, print the address
+build/pouw balance --wallet build/demo/node-1/node.key
+build/pouw send pw8adeb7… 10 --fee 1 --wallet build/demo/node-1/node.key   # spend node 1's mining rewards
+build/pouw accounts                              # every balance on the chain
+docker compose exec node1 pouw status --node http://127.0.0.1:9200          # the same inside the testnet
+```
+
+Rules (nonces against replay, per-block balances that follow reorgs, the mempool) are in `docs/contract.md` §5.
+
 ## Components
 
 ### Node (C++20) — `node/`

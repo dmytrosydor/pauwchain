@@ -21,6 +21,10 @@ struct ApiHandlers {
   std::function<json(uint64_t from_height)> chain_from;
   std::function<std::optional<json>(const std::string& hash_hex)> block;
   std::function<json(const json& request)> admin;  // {"mode": "honest"|"lazy"} or {"paused": bool}
+  std::function<json(const json& tx)> submit_tx;    // {"accepted": bool, "id"?, "error"?}
+  std::function<json(const std::string& key_hex)> account;
+  std::function<json()> accounts;                  // every account at the tip, richest first
+  std::function<json()> mempool;
   EventBus* events = nullptr;
 };
 
@@ -30,6 +34,10 @@ struct ApiHandlers {
 //   GET  /block/<hash>           block by hash
 //   GET  /events?since=SEQ       event stream (Server-Sent Events); also the Last-Event-ID header
 //   POST /admin                  {"mode": "lazy"} / {"mode": "honest"} / {"paused": true}
+//   POST /tx                     a signed transfer (docs/contract.md §5)
+//   GET  /account/<key>          balance, nonce and the next free nonce of an account
+//   GET  /accounts               all balances at the tip
+//   GET  /mempool                transfers waiting for a block
 class Api {
 public:
   Api(std::string listen_addr, uint16_t port, ApiHandlers handlers);

@@ -46,7 +46,10 @@ def block_header_bytes(header: dict) -> bytes:
         struct.pack("<I", header["k"]),
         struct.pack("<q", header["metric_micro"]),  # signed 64-bit integer: <q
     ]
+    if header["version"] >= 2:  # version 2 also commits the block's transfers
+        parts.append(bytes.fromhex(header["tx_root"]))
     raw = b"".join(parts)
-    if len(raw) != 236:
-        raise ValueError(f"Header must be 236 bytes, got {len(raw)}")
+    size = 268 if header["version"] >= 2 else 236
+    if len(raw) != size:
+        raise ValueError(f"Header must be {size} bytes, got {len(raw)}")
     return raw

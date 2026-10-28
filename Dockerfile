@@ -9,10 +9,10 @@ RUN apt-get update \
 WORKDIR /src
 COPY CMakeLists.txt .
 COPY node/ node/
-# FetchContent downloads nlohmann/json, PicoSHA2 and cpp-httplib here.
+# FetchContent downloads nlohmann/json, PicoSHA2, cpp-httplib and Monocypher here.
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
- && cmake --build build -j --target node \
- && strip build/node
+ && cmake --build build -j --target node pouw-cli \
+ && strip build/node build/pouw
 
 
 FROM python:3.12-slim-bookworm
@@ -36,6 +36,7 @@ RUN useradd --create-home --uid 10001 pouw \
  && chown pouw:pouw /app/data /app/state
 WORKDIR /app
 COPY --from=build /src/build/node /usr/local/bin/node
+COPY --from=build /src/build/pouw /usr/local/bin/pouw
 COPY worker/ worker/
 COPY testnet/ testnet/
 USER pouw

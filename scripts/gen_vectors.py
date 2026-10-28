@@ -32,6 +32,8 @@ def header(rng, **over):
         "metric_micro": rng.randrange(I64_MIN, I64_MAX),
     }
     h.update(over)
+    if h["version"] >= 2:  # version 2 headers also carry tx_root
+        h["tx_root"] = rand_hash(rng)
     return h
 
 

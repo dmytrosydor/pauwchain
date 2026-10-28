@@ -11,6 +11,7 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, RichLog, Static
 
@@ -30,10 +31,14 @@ If the numbers don't match, the block is thrown out.
 
 [b]On the screen[/b]
   [b]top[/b]          is the network healthy, how good is the model, how many cheats were caught
-  [b]nodes[/b]        each one's role: [green]honest[/green] trains, [red]CHEATER[/red] sends fake blocks
+  [b]nodes[/b]        each one's role: [green]honest[/green] trains, [red]CHEATER[/red] sends fake blocks; its coins
   [b]accuracy[/b]     how the model got better, block by block
-  [b]blocks[/b]       the shared chain: who trained each block and the accuracy after it
+  [b]blocks[/b]       the shared chain: who trained each block, the accuracy after it, transfers
   [b]feed[/b]         what just happened, in plain words
+
+[b]Coins[/b]: each accepted block pays the node that trained it [b]50 coins[/b], plus the fees
+of the transfers inside it. Anyone can send coins with the [b]pouw[/b] wallet:
+[b]pouw send ADDRESS AMOUNT[/b]. Cheaters earn nothing: their fake blocks are thrown out.
 
 [b]Try it[/b]: pick an honest node with ←/→ and press [b]c[/b] — watch the others catch it.
 Press [b]c[/b] again to make it honest.
@@ -44,7 +49,8 @@ Press [b]c[/b] again to make it honest.
 class Help(ModalScreen):
     CSS = """
     Help { align: center middle; }
-    #help { width: 96; height: auto; padding: 1 3; border: round $accent; background: $surface; }
+    #help { width: 96; height: auto; max-height: 100%; overflow-y: auto; padding: 1 2;
+            border: round $accent; background: $surface; }
     """
 
     def compose(self) -> ComposeResult:
@@ -59,7 +65,7 @@ class Pouwtop(App):
     ENABLE_COMMAND_PALETTE = False
     CSS = """
     Screen { background: $background; }
-    #headline { height: 5; padding: 0 2; border: round $success; }
+    #headline { height: 6; padding: 0 2; border: round $success; }
     #headline.bad { border: round $error; }
     #headline.busy { border: round $warning; }
     .section { color: $text-muted; padding: 0 1; height: 1; }
@@ -68,9 +74,9 @@ class Pouwtop(App):
     .card.selected { border: thick $accent; }
     .card.cheater { border: round $error; }
     .card.cheater.selected { border: thick $error; }
-    #middle { height: 1fr; min-height: 10; }
+    #middle { height: 1fr; min-height: 9; }
     #chart-box { width: 1fr; border: round $panel-lighten-2; padding: 0 1; }
-    #blocks { width: 1fr; border: round $panel-lighten-2; }
+    #blocks { width: 57; border: round $panel-lighten-2; }  /* exactly the table: the chart takes the rest */
     #feed { height: 1fr; min-height: 6; border: round $panel-lighten-2; padding: 0 1; }
     """
     BINDINGS = [
@@ -111,13 +117,13 @@ class Pouwtop(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#chart-box").border_title = "model accuracy, block by block"
-        blocks = self.query_one("#blocks", DataTable)
+        self.main.query_one("#chart-box").border_title = "model accuracy, block by block"
+        blocks = self.main.query_one("#blocks", DataTable)
         blocks.border_title = "the chain (newest first)"
         blocks.can_focus = False
-        for col, width in (("block", 7), ("trained by", 12), ("accuracy", 10), ("when", 11)):
+        for col, width in (("block", 6), ("trained by", 10), ("accuracy", 8), ("transfers", 9), ("when", 10)):
             blocks.add_column(col, key=col, width=width)
-        feed = self.query_one("#feed", RichLog)
+        feed = self.main.query_one("#feed", RichLog)
         feed.border_title = "what's happening"
         feed.can_focus = False
         self.following = False
@@ -127,6 +133,11 @@ class Pouwtop(App):
 
     def on_unmount(self) -> None:
         self.stopping.set()
+
+    @property
+    def main(self):
+        """The dashboard screen; updates keep landing there while the help is open on top."""
+        return self.screen_stack[0]
 
     # --- data ---------------------------------------------------------------------------------
 
@@ -201,13 +212,22 @@ class Pouwtop(App):
         if ev["type"] == "mode" and st:
             line = f"[b]Node {st['id']}[/] {line}"
         stamp = time.strftime("%H:%M:%S", time.localtime(ev["ts"] / 1000))
-        self.query_one("#feed", RichLog).write(Text.from_markup(f"[dim]{stamp}[/]  {line}"))
+        try:
+            self.main.query_one("#feed", RichLog).write(Text.from_markup(f"[dim]{stamp}[/]  {line}"))
+        except NoMatches:  # the app is closing: a worker delivered an event after the widgets were removed
+            pass
 
     # --- display ------------------------------------------------------------------------------
 
     def render_all(self) -> None:
+        try:
+            self._render_all()
+        except NoMatches:  # the app is closing: a worker delivered data after the widgets were removed
+            pass
+
+    def _render_all(self) -> None:
         tip = self.chain[-1]["header"] if self.chain else None
-        head = self.query_one("#headline", Static)
+        head = self.main.query_one("#headline", Static)
         head.update(headline(self.statuses, tip, len(self.caught)))
         up = [s for s in self.statuses.values() if s]
         head.set_class(not up, "bad")
@@ -218,28 +238,30 @@ class Pouwtop(App):
             per_miner[b["header"]["miner_id"]] = per_miner.get(b["header"]["miner_id"], 0) + 1
         for i, port in enumerate(self.ports):
             st = self.statuses.get(port)
-            c = self.query_one(f"#card-{port}", Static)
+            c = self.main.query_one(f"#card-{port}", Static)
             c.update(card(st, per_miner.get(st["miner_id"], 0) if st else 0))
             if st:
                 c.border_title = f"node {st['id']}"
             c.set_class(i == self.selected, "selected")
             c.set_class(bool(st and st["lazy"]), "cheater")
 
-        box = self.query_one("#chart-box")
+        box = self.main.query_one("#chart-box")
         accs = [b["header"]["metric_micro"] / 1e4 for b in self.chain[1:]]
         width = max(10, box.size.width - 2)
         height = max(3, box.size.height - 3)
-        self.query_one("#chart", Static).update(chart(accs, width, height))
+        self.main.query_one("#chart", Static).update(chart(accs, width, height))
 
-        table = self.query_one("#blocks", DataTable)
+        table = self.main.query_one("#blocks", DataTable)
         table.clear()
         now = time.time()
         for b in reversed(self.chain[-100:]):
             h = b["header"]
             if h["height"] == 0:
-                table.add_row("#0", Text("start", style="dim"), "—", "")
+                table.add_row("#0", Text("start", style="dim"), "—", "", "")
                 continue
+            txs = len(b.get("txs") or [])
             table.add_row(f"#{h['height']}", who(h["miner_id"], self.names), f"{h['metric_micro'] / 1e4:.1f} %",
+                          str(txs) if txs else "",
                           Text(ago(h["timestamp"], now), style="dim") if h.get("timestamp") else "")
 
     # --- actions ------------------------------------------------------------------------------
@@ -253,7 +275,7 @@ class Pouwtop(App):
         try:
             self.clients[port].admin(**request)
         except (OSError, RuntimeError) as e:
-            self.call_from_thread(self.query_one("#feed", RichLog).write, f"[red]could not reach the node: {e}[/]")
+            self.call_from_thread(self.main.query_one("#feed", RichLog).write, f"[red]could not reach the node: {e}[/]")
         self.poll_status()
 
     def action_toggle_cheat(self) -> None:

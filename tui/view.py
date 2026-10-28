@@ -14,8 +14,18 @@ def short(h: str, n: int = 8) -> str:
     return h[:n]
 
 
+def address(key: str) -> str:
+    """A wallet address as people see it: pw + hex, shortened."""
+    return f"pw{short(key, 6)}…"
+
+
 def who(miner: str, names: Dict[str, str]) -> str:
-    return f"node {names[miner]}" if miner in names else f"miner {short(miner)}"
+    """A known node by its id, anyone else by their shortened wallet address (a miner's id is its address)."""
+    return f"node {names[miner]}" if miner in names else address(miner)
+
+
+def plural(n: int, word: str) -> str:
+    return f"{n} {word}" + ("" if n == 1 else "s")
 
 
 def accuracy(header: dict) -> float:
@@ -42,8 +52,18 @@ def describe(ev: dict, names: Dict[str, str]) -> Optional[str]:
     """One feed line (Rich markup) for an event, or None if the event is routine and stays out of the feed."""
     t, d = ev["type"], ev.get("data", {})
     if t == "tip":
-        return (f"[green]■[/] Block [b]#{d['height']}[/] added to the chain — trained by {who(d['miner'], names)}, "
+        miner = who(d["miner"], names)
+        line = (f"[green]■[/] Block [b]#{d['height']}[/] added to the chain — trained by {miner}, "
                 f"model accuracy [b]{d['metric_micro'] / 1e4:.1f} %[/]")
+        if d.get("reward"):
+            line += f", {miner} earned [b]{plural(d['reward'], 'coin')}[/]"
+        if d.get("txs"):
+            line += f" · {plural(d['txs'], 'transfer')} confirmed"
+        return line
+    if t == "tx":
+        fee = f" (+{d['fee']} fee)" if d.get("fee") else ""
+        return (f"[cyan]→[/] {who(d['from'], names)} sent [b]{plural(d['amount'], 'coin')}[/]{fee} "
+                f"to {who(d['to'], names)} [dim](waiting for the next block)[/]")
     if t == "verdict" and not d.get("accepted"):
         cheater = who(d["miner"], names)
         reason = d.get("reason", "")
@@ -70,15 +90,17 @@ def describe(ev: dict, names: Dict[str, str]) -> Optional[str]:
 
 
 def dedupe_key(ev: dict) -> Optional[tuple]:
-    """Every node reports the same block; the feed shows it once."""
+    """Every node reports the same block (and the same transfer); the feed shows it once."""
     d = ev.get("data", {})
     if ev["type"] in ("tip", "verdict", "unavailable") and "hash" in d:
         return ev["type"], d["hash"]
+    if ev["type"] == "tx" and "id" in d:
+        return "tx", d["id"]
     return None
 
 
 def headline(statuses: Dict[int, Optional[dict]], tip: Optional[dict], caught: int) -> Text:
-    """Three lines on top: is the network fine, how good is the model, how many cheats were caught."""
+    """Lines on top: is the network fine, how good is the model, how many cheats were caught, the coins."""
     up = [s for s in statuses.values() if s]
     if not up:
         return Text.from_markup(
@@ -104,11 +126,19 @@ def headline(statuses: Dict[int, Optional[dict]], tip: Optional[dict], caught: i
                  f"fake blocks caught and thrown out: [b]{caught}[/]")
     else:
         guard = f"No one is cheating right now.  Cheating attempts caught so far: [b]{caught}[/]"
-    return Text.from_markup(f"{status}\n{model}\n{guard}")
+    lines = [status, model, guard]
+    ref = honest or up
+    supply = max((s["supply"] for s in ref if s.get("supply") is not None), default=None)
+    if supply is not None:
+        waiting = max((s.get("mempool", 0) for s in ref), default=0)
+        queue = (f"[b]{plural(waiting, 'transfer')}[/] waiting for a block" if waiting
+                 else "no transfers waiting")
+        lines.append(f"Coins in existence: [b]{supply}[/]  ·  {queue}")
+    return Text.from_markup("\n".join(lines))
 
 
 def card(st: Optional[dict], in_chain: int) -> Text:
-    """What one node is and what it is doing, in four short lines."""
+    """What one node is, what it is doing and what it owns, in five short lines."""
     if st is None:
         return Text.from_markup("[red]✗ offline[/]\n\nnot responding")
     if st.get("paused"):
@@ -121,6 +151,8 @@ def card(st: Optional[dict], in_chain: int) -> Text:
         stats = f"fakes sent   [b]{st['mined']}[/]\nin the chain [b]{in_chain}[/] blocks"
     else:
         stats = f"in the chain [b]{in_chain}[/] blocks\ncaught       [b]{st['rejected']}[/] fakes"
+    if st.get("balance") is not None:
+        stats += f"\ncoins        [b]{st['balance']}[/]"
     return Text.from_markup(f"{role}\n{doing}\n{stats}")
 
 
@@ -144,5 +176,7 @@ def chart(values: List[float], width: int, height: int) -> Text:
         rows.append(f"{label:>5}│{line}")
     span = len(values) * bar
     left, right = "oldest", "newest →"
+    if span <= len(left) + len(right):  # too narrow for both labels
+        left = ""
     rows.append(f"{'':>5}└{left}{right:>{max(1, span - len(left))}}")
     return Text("\n".join(rows), style="green")

@@ -49,6 +49,24 @@ Api::Api(std::string listen_addr, uint16_t port, ApiHandlers handlers)
     reply(res, h_.admin(body));
   });
 
+  s.Post("/tx", [this](const httplib::Request& req, httplib::Response& res) {
+    json body = json::parse(req.body, nullptr, false);
+    if (body.is_discarded() || !body.is_object()) {
+      reply(res, {{"accepted", false}, {"error", "expected a JSON object"}}, 400);
+      return;
+    }
+    json out = h_.submit_tx(body);
+    reply(res, out, out.value("accepted", false) ? 200 : 400);
+  });
+
+  s.Get(R"(/account/([0-9a-f]{64}))", [this](const httplib::Request& req, httplib::Response& res) {
+    reply(res, h_.account(req.matches[1]));
+  });
+
+  s.Get("/accounts", [this](const httplib::Request&, httplib::Response& res) { reply(res, h_.accounts()); });
+
+  s.Get("/mempool", [this](const httplib::Request&, httplib::Response& res) { reply(res, h_.mempool()); });
+
   s.Get("/events", [this](const httplib::Request& req, httplib::Response& res) {
     uint64_t since = 0;
     if (req.has_param("since")) {

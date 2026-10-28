@@ -15,6 +15,7 @@
 #include "block.hpp"
 #include "chain.hpp"
 #include "events.hpp"
+#include "mempool.hpp"
 #include "p2p.hpp"
 #include "worker_bridge.hpp"
 
@@ -33,6 +34,7 @@ struct Config {
   std::string worker_server = "worker/server.py";
   std::string worker_mode = "server";  // server: persistent worker on a Unix socket; spawn: a process per call
   std::string run_dir;            // worker task/result files, chain and node status
+  std::string key_path;           // the node's Ed25519 key; created on first start (default: run_dir/node.key)
   std::string device = "cpu";
   bool lazy = false;              // attack 1: checkpoints are copies of w_start, no training
   double lazy_delay_s = 1.0;      // keeps a lazy node from flooding the network with blocks
@@ -58,6 +60,10 @@ public:
   json chain_from(uint64_t from_height);
   std::optional<json> block_json(const std::string& hash_hex);
   json admin(const json& request);
+  json submit_tx(const json& tx);
+  json account(const std::string& key_hex);
+  json accounts();
+  json mempool();
 
 private:
   struct Incoming {
@@ -72,7 +78,8 @@ private:
 
   // Full verification: structure + B (+ A). Returns the rejection reason or nullopt. All checkpoints are
   // fetched from peers before the transitions are picked; if they cannot be fetched, `unavailable` is set.
-  std::optional<std::string> validate(int peer, const Block& b, const Block& parent, std::string& detail,
+  std::optional<std::string> validate(int peer, const Block& b, const Block& parent,
+                                      const std::optional<std::string>& ledger_err, std::string& detail,
                                       json& checks, bool& unavailable);
   // Makes sure the store has every blob, asking `peer` first and then the others. On failure returns
   // the hash that could not be fetched.
@@ -86,9 +93,16 @@ private:
   void log(const std::string& line) const;
   void request_full_sync(int peer);
 
+  // After a tip change (under mu_): rebuilds the mempool against the new balances, taking back transfers
+  // from blocks a reorg abandoned. Returns the transfers to relay.
+  std::vector<Tx> on_new_tip();
+  json tip_event(const Block& b) const;
   Config cfg_;
   Task task_;
-  Hash miner_id_{};
+  Hash miner_id_{};  // = the public key of key_
+  std::unique_ptr<KeyPair> key_;
+  Mempool mempool_;  // under mu_
+  Hash last_tip_{};  // the tip the mempool was last rebuilt for (under mu_)
   std::unique_ptr<Chain> chain_;
   std::unique_ptr<WorkerBridge> miner_bridge_;
   std::unique_ptr<WorkerBridge> verifier_bridge_;

@@ -75,6 +75,7 @@ Config parse_args(int argc, char** argv) {
     else if (a == "--worker") c.worker_script = need(i);
     else if (a == "--worker-mode") c.worker_mode = need(i);
     else if (a == "--run-dir") c.run_dir = need(i);
+    else if (a == "--key") c.key_path = need(i);
     else if (a == "--device") c.device = need(i);
     else if (a == "--lazy") c.lazy = true;
     else if (a == "--lazy-delay") c.lazy_delay_s = std::stod(need(i));
@@ -90,6 +91,7 @@ Config parse_args(int argc, char** argv) {
     throw std::invalid_argument("required: --id, --port, --task");
   }
   if (c.run_dir.empty()) c.run_dir = "run/node-" + c.id;
+  if (c.key_path.empty()) c.key_path = c.run_dir + "/node.key";
   if (c.worker_mode != "server" && c.worker_mode != "spawn") {
     throw std::invalid_argument("--worker-mode must be server or spawn");
   }
@@ -101,8 +103,9 @@ Node::Node(Config cfg) : cfg_(std::move(cfg)) {
   if (!in) throw std::runtime_error("cannot read task file " + cfg_.task_path);
   std::string raw((std::istreambuf_iterator<char>(in)), {});
   task_ = task_from_json(json::parse(raw), raw);
-  miner_id_ = sha256("node-" + cfg_.id);
   std::filesystem::create_directories(cfg_.run_dir);
+  key_ = std::make_unique<KeyPair>(KeyPair::load_or_create(cfg_.key_path));
+  miner_id_ = key_->public_key();
   if (cfg_.worker_mode == "server") {
     // Separate processes for mining and verification: checking others' blocks does not wait for our own training.
     miner_bridge_ = std::make_unique<WorkerBridge>(cfg_.python, cfg_.worker_server, cfg_.run_dir + "/mine",
@@ -132,8 +135,18 @@ void Node::run() {
   }
   Hash w0 = hash_from_hex(g->at("w_start").get<std::string>());
   chain_ = std::make_unique<Chain>(make_genesis(task_, w0));
-  size_t restored = chain_->load(cfg_.run_dir + "/chain.json");
-  log("genesis " + short_hex(chain_->genesis().hash()) + " w0=" + short_hex(w0) +
+  size_t restored = 0;
+  const std::string saved = cfg_.run_dir + "/chain.json";
+  try {
+    restored = chain_->load(saved);
+  } catch (const std::exception& e) {
+    // Keep the old file (e.g. a chain from before the protocol upgrade) instead of silently overwriting it.
+    std::filesystem::rename(saved, saved + ".old");
+    log(std::string(e.what()) + "; moved to chain.json.old, starting from genesis");
+  }
+  last_tip_ = chain_->tip().hash();
+  log("address " + to_hex(miner_id_) + ", genesis " + short_hex(chain_->genesis().hash()) + " w0=" +
+      short_hex(w0) +
       (restored ? ", restored " + std::to_string(restored) + " blocks" : "") +
       (cfg_.lazy ? ", mode=LAZY" : ""));
   {
@@ -149,6 +162,10 @@ void Node::run() {
     h.chain_from = [this](uint64_t from) { return chain_from(from); };
     h.block = [this](const std::string& hex) { return block_json(hex); };
     h.admin = [this](const json& req) { return admin(req); };
+    h.submit_tx = [this](const json& tx) { return submit_tx(tx); };
+    h.account = [this](const std::string& hex) { return account(hex); };
+    h.accounts = [this] { return accounts(); };
+    h.mempool = [this] { return mempool(); };
     h.events = events_.get();
     api_ = std::make_unique<Api>(cfg_.api_listen, cfg_.api_port, std::move(h));
     api_->start();
@@ -217,6 +234,7 @@ void Node::mining_loop() {
     }
 
     Block b;
+    std::vector<Tx> relay;  // transfers that became ready with our block
     Header& h = b.header;
     h.height = parent.header.height + 1;
     h.prev_hash = parent.hash();
@@ -256,7 +274,6 @@ void Node::mining_loop() {
       h.metric_micro = res->at("metric_micro").get<int64_t>();
     }
     h.ckpt_root = ckpt_root_of(b.ckpt_hashes);
-    h.timestamp = unix_now();
 
     {
       std::lock_guard lock(mu_);
@@ -266,19 +283,26 @@ void Node::mining_loop() {
         events_->publish("lost_race", {{"height", h.height}});
         continue;
       }
+      // Transfers are picked when the block is sealed, not when training starts: the training seed does not
+      // depend on them, so the block carries everything that arrived meanwhile.
+      if (!lazy) b.txs = mempool_.select(chain_->ledger(parent.hash()));
+      h.tx_root = tx_root_of(b.txs);
+      h.timestamp = unix_now();
+      b.sign(*key_);
       ++mined_;
       // The attacker does not add its own blocks locally; it follows the honest chain to stay in the race.
-      if (!lazy) chain_->add(b);
+      if (!lazy) {
+        chain_->add(b);
+        relay = on_new_tip();
+      }
       persist();
     }
+    for (const Tx& tx : relay) p2p_->broadcast({{"type", "tx"}, {"tx", tx_to_json(tx)}});
     log(std::string(lazy ? "LAZY block" : "MINED") + " h=" + std::to_string(h.height) +
         " hash=" + short_hex(b.hash()) + " acc=" + std::to_string(h.metric_micro / 1e4) + "%");
     events_->publish("mined", {{"height", h.height}, {"hash", to_hex(b.hash())}, {"lazy", lazy},
                                {"metric_micro", h.metric_micro}});
-    if (!lazy) {
-      events_->publish("tip", {{"height", h.height}, {"hash", to_hex(b.hash())},
-                               {"metric_micro", h.metric_micro}, {"miner", to_hex(h.miner_id)}});
-    }
+    if (!lazy) events_->publish("tip", tip_event(b));
     p2p_->broadcast({{"type", "block"}, {"block", block_to_json(b)}});
   }
 }
@@ -323,6 +347,18 @@ void Node::on_message(int peer, const json& msg) {
       }
     }
     p2p_->send(peer, {{"type", "blocks"}, {"blocks", blocks}});
+  } else if (type == "tx") {
+    Tx tx = tx_from_json(msg.at("tx"));
+    bool fresh;
+    {
+      std::lock_guard lock(mu_);
+      fresh = mempool_.offer(tx, chain_->tip_ledger(), task_.task_id).result == Mempool::Result::ready;
+    }
+    if (fresh) {
+      events_->publish("tx", {{"id", to_hex(tx.id())}, {"from", to_hex(tx.from)}, {"to", to_hex(tx.to)},
+                              {"amount", tx.amount}, {"fee", tx.fee}});
+      p2p_->broadcast({{"type", "tx"}, {"tx", tx_to_json(tx)}}, peer);
+    }
   } else if (type == "get_blob") {
     serve_blob(peer, msg);
   } else if (type == "blob") {
@@ -434,8 +470,11 @@ std::optional<Hash> Node::fetch_blobs(int peer, const std::vector<Hash>& hashes)
 }
 
 std::optional<std::string> Node::validate(int peer, const Block& b, const Block& parent,
-                                          std::string& detail, json& checks, bool& unavailable) {
+                                          const std::optional<std::string>& ledger_err, std::string& detail,
+                                          json& checks, bool& unavailable) {
+  // Cheap checks first (signature, transfers), so a forged block costs no downloads and no training.
   if (auto err = check_structure(b, parent, task_)) return "structure: " + *err;
+  if (ledger_err) return "transfers: " + *ledger_err;
 
   // Every checkpoint is fetched before any transition is picked. Asking only for the picked ones would tell
   // the miner the private choice (D5): it could withhold the data of a bad transition and resend the block
@@ -500,6 +539,8 @@ void Node::validator_loop() {
     Incoming in;
     Block parent;
     Hash h;
+    std::optional<std::string> ledger_err;  // the block's transfers against the parent's balances
+    std::vector<Tx> relay;                  // transfers that became ready with the new tip
     {
       std::unique_lock lock(mu_);
       cv_.wait(lock, [this] { return !inbox_.empty(); });
@@ -529,7 +570,19 @@ void Node::validator_loop() {
         request_full_sync(in.peer);
         continue;
       }
+      // Whatever the header does not hash (the miner's signature) or only commits to (checkpoint and transfer
+      // lists) must match it. A mismatch is a mangled copy, not proof that the block is bad: it is dropped
+      // without remembering the hash, so the genuine block is still accepted when it arrives.
+      const Block& b = in.block;
+      if (ckpt_root_of(b.ckpt_hashes) != b.header.ckpt_root || tx_root_of(b.txs) != b.header.tx_root ||
+          !verify(b.header.miner_id, h, b.sig)) {
+        log("DROP h=" + std::to_string(b.header.height) + " hash=" + short_hex(h) + " from peer " +
+            std::to_string(in.peer) + ": contents do not match the header (corrupted or forged copy)");
+        continue;
+      }
       parent = *chain_->get(prev);
+      Ledger scratch;
+      ledger_err = chain_->try_apply(in.block, scratch);
       validating_ = true;
     }
 
@@ -537,7 +590,7 @@ void Node::validator_loop() {
     json checks = json::array();
     auto t0 = Clock::now();
     bool unavailable = false;
-    auto reason = validate(in.peer, in.block, parent, detail, checks, unavailable);
+    auto reason = validate(in.peer, in.block, parent, ledger_err, detail, checks, unavailable);
     double secs = std::chrono::duration<double>(Clock::now() - t0).count();
 
     std::string what = "h=" + std::to_string(in.block.header.height) + " hash=" + short_hex(h) +
@@ -568,17 +621,15 @@ void Node::validator_loop() {
       } else {
         bool new_tip = chain_->add(in.block);
         ++accepted_;
-        if (new_tip) tip_changed_ = true;
+        if (new_tip) {
+          tip_changed_ = true;
+          relay = on_new_tip();
+        }
         log("ACCEPT " + what + detail + " (" + std::to_string(secs).substr(0, 4) + "s)" +
             (new_tip ? "" : " [side branch]"));
         verdict["new_tip"] = new_tip;
         events_->publish("verdict", verdict);
-        if (new_tip) {
-          const Block& t = chain_->tip();
-          events_->publish("tip", {{"height", t.header.height}, {"hash", to_hex(t.hash())},
-                                   {"metric_micro", t.header.metric_micro},
-                                   {"miner", to_hex(t.header.miner_id)}});
-        }
+        if (new_tip) events_->publish("tip", tip_event(chain_->tip()));
       }
       // This block's children can now be processed: either verified or rejected along with the parent.
       for (auto it = orphans_.begin(); it != orphans_.end();) {
@@ -592,6 +643,7 @@ void Node::validator_loop() {
       persist();
     }
     if (!reason) p2p_->broadcast({{"type", "block"}, {"block", block_to_json(in.block)}}, in.peer);
+    for (const Tx& tx : relay) p2p_->broadcast({{"type", "tx"}, {"tx", tx_to_json(tx)}});
   }
 }
 
@@ -602,6 +654,11 @@ json Node::status_locked() const {
   return {
       {"id", cfg_.id},
       {"miner_id", to_hex(miner_id_)},
+      {"task_id", to_hex(task_.task_id)},
+      {"balance", chain_->tip_ledger().account(miner_id_).balance},
+      {"supply", chain_->tip_ledger().supply()},
+      {"mempool", mempool_.ready_count()},
+      {"mempool_waiting", mempool_.waiting_count()},
       {"lazy", lazy_mode_.load()},
       {"paused", paused_.load()},
       {"height", chain_->height()},
@@ -665,6 +722,73 @@ json Node::admin(const json& request) {
   std::lock_guard lock(mu_);
   persist();
   return status_locked();
+}
+
+json Node::tip_event(const Block& b) const {
+  uint64_t fees = 0;
+  for (const auto& tx : b.txs) fees += tx.fee;
+  return {{"height", b.header.height}, {"hash", to_hex(b.hash())}, {"metric_micro", b.header.metric_micro},
+          {"miner", to_hex(b.header.miner_id)}, {"txs", b.txs.size()}, {"reward", kBlockReward + fees}};
+}
+
+std::vector<Tx> Node::on_new_tip() {
+  std::vector<Tx> back;
+  for (const Block& b : chain_->abandoned(last_tip_)) back.insert(back.end(), b.txs.begin(), b.txs.end());
+  last_tip_ = chain_->tip().hash();
+  return mempool_.retarget(chain_->tip_ledger(), back);
+}
+
+json Node::submit_tx(const json& j) {
+  Tx tx;
+  try {
+    tx = tx_from_json(j);
+  } catch (const std::exception& e) {
+    return {{"accepted", false}, {"error", std::string("malformed transfer: ") + e.what()}};
+  }
+  Mempool::Outcome out;
+  {
+    std::lock_guard lock(mu_);
+    out = mempool_.offer(tx, chain_->tip_ledger(), task_.task_id);
+  }
+  // A wallet gets a clear answer; a transfer that has to wait is kept, but the wallet hears why.
+  if (out.result == Mempool::Result::rejected) return {{"accepted", false}, {"error", out.reason}};
+  if (out.result == Mempool::Result::waiting) {
+    return {{"accepted", true}, {"id", to_hex(tx.id())}, {"waiting", out.reason}};
+  }
+  log("TX " + short_hex(tx.id()) + " " + std::to_string(tx.amount) + " from " + short_hex(tx.from) + " to " +
+      short_hex(tx.to));
+  events_->publish("tx", {{"id", to_hex(tx.id())}, {"from", to_hex(tx.from)}, {"to", to_hex(tx.to)},
+                          {"amount", tx.amount}, {"fee", tx.fee}});
+  p2p_->broadcast({{"type", "tx"}, {"tx", tx_to_json(tx)}});
+  return {{"accepted", true}, {"id", to_hex(tx.id())}};
+}
+
+json Node::account(const std::string& key_hex) {
+  const Hash key = hash_from_hex(key_hex);
+  std::lock_guard lock(mu_);
+  const Account& acc = chain_->tip_ledger().account(key);
+  return {{"address", key_hex}, {"balance", acc.balance}, {"nonce", acc.nonce},
+          {"next_nonce", mempool_.next_nonce(key, chain_->tip_ledger())},
+          {"height", chain_->height()}};
+}
+
+json Node::accounts() {
+  std::lock_guard lock(mu_);
+  const Ledger& l = chain_->tip_ledger();
+  json out = json::array();
+  for (const auto& [key, acc] : l.accounts()) {
+    out.push_back({{"address", to_hex(key)}, {"balance", acc.balance}, {"nonce", acc.nonce}});
+  }
+  std::sort(out.begin(), out.end(), [](const json& a, const json& b) { return a["balance"] > b["balance"]; });
+  return {{"height", chain_->height()}, {"supply", l.supply()}, {"accounts", out}};
+}
+
+json Node::mempool() {
+  std::lock_guard lock(mu_);
+  json ready = json::array(), waiting = json::array();
+  for (const Tx& tx : mempool_.ready()) ready.push_back(tx_to_json(tx));
+  for (const Tx& tx : mempool_.waiting()) waiting.push_back(tx_to_json(tx));
+  return {{"txs", ready}, {"waiting", waiting}};
 }
 
 void Node::persist() {
