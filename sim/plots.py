@@ -17,6 +17,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
 
+from sim.mechanisms import DEFAULT_ALPHA  # noqa: E402
+
 INK, INK2, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 BLUE, ORANGE = "#2a78d6", "#eb6834"
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6"]
@@ -104,7 +106,7 @@ def matrix(run_dir: str) -> str:
 
 
 def e1(run_dir: str) -> str:
-    """Distribution of B's relative distance by transition type; the vertical line is the threshold α = 0.3."""
+    """Distribution of B's relative distance by transition type; the vertical line is the calibrated threshold α."""
     with open(os.path.join(run_dir, "transitions.csv")) as f:
         rows = list(csv.DictReader(f))
     ks = sorted({int(r["k"]) for r in rows})
@@ -118,7 +120,7 @@ def e1(run_dir: str) -> str:
                       if int(r["k"]) == k and r["kind"] == kind and r["device"] == dev]
                 ax.scatter(xs, [i + dy] * len(xs), s=10, color=BLUE if dev == "cpu" else ORANGE,
                            marker=mk, alpha=0.6, linewidths=0, label=dev if i == 0 else None)
-        ax.axvline(0.3, color=INK, lw=1, ls="--")
+        ax.axvline(DEFAULT_ALPHA, color=INK, lw=1, ls="--")
         ax.set_xscale("log")
         ax.set_xlim(floor / 2, 10)
         ax.set_title(f"k = {k}", color=INK, fontsize=10)
