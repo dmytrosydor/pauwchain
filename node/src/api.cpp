@@ -19,8 +19,9 @@ std::string sse_frame(const json& ev) {
 
 }  // namespace
 
-Api::Api(uint16_t port, ApiHandlers handlers)
-    : port_(port), h_(std::move(handlers)), server_(std::make_unique<httplib::Server>()) {
+Api::Api(std::string listen_addr, uint16_t port, ApiHandlers handlers)
+    : listen_addr_(std::move(listen_addr)),
+      port_(port), h_(std::move(handlers)), server_(std::make_unique<httplib::Server>()) {
   auto& s = *server_;
 
   s.Get("/status", [this](const httplib::Request&, httplib::Response& res) { reply(res, h_.status()); });
@@ -87,8 +88,8 @@ Api::Api(uint16_t port, ApiHandlers handlers)
 Api::~Api() { stop(); }
 
 void Api::start() {
-  if (!server_->bind_to_port("127.0.0.1", port_)) {
-    throw std::runtime_error("API: cannot bind 127.0.0.1:" + std::to_string(port_));
+  if (!server_->bind_to_port(listen_addr_, port_)) {
+    throw std::runtime_error("API: cannot bind " + listen_addr_ + ":" + std::to_string(port_));
   }
   thread_ = std::thread([this] { server_->listen_after_bind(); });
 }

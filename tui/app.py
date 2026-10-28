@@ -18,7 +18,7 @@ from tui.view import describe, short, who
 
 QUIET = {"tip"}  # events that refresh panels but are not written to the log
 COLUMNS = [("node", 6), ("API", 6), ("mode", 10), ("height", 7), ("tip", 10), ("mined", 7),
-           ("accepted", 9), ("rejected", 9), ("lost", 6), ("peers", 6)]
+           ("accepted", 9), ("rejected", 9), ("lost", 6), ("peers", 6), ("blobs in/out", 13)]
 
 
 class Pouwtop(App):
@@ -68,7 +68,7 @@ class Pouwtop(App):
         for col, width in (("height", 7), ("hash", 10), ("miner", 12), ("accuracy", 10)):
             blocks.add_column(col, key=col, width=width)
         for port in self.clients:
-            nodes.add_row(*["…"] * 10, key=str(port))
+            nodes.add_row(*["…"] * len(COLUMNS), key=str(port))
             self.follow(port)
         self.set_interval(1.0, self.poll_status)
         self.poll_status()
@@ -118,7 +118,7 @@ class Pouwtop(App):
     def show_status(self, port: int, st) -> None:
         table = self.query_one("#nodes", DataTable)
         if st is None:
-            row = ["?", str(port), Text("unreachable", style="red")] + ["-"] * 7
+            row = ["?", str(port), Text("unreachable", style="red")] + ["-"] * (len(COLUMNS) - 3)
         else:
             self.names[st["miner_id"]] = st["id"]
             mode = Text("LAZY", style="bold yellow") if st["lazy"] else Text("honest")
@@ -127,7 +127,8 @@ class Pouwtop(App):
             # Two nodes are connected both ways, so count distinct node_ids, not connections.
             peers = len({p["node_id"] for p in st["peers"]})
             row = [st["id"], str(port), mode, str(st["height"]), short(st["tip"]), str(st["mined"]),
-                   str(st["accepted"]), str(st["rejected"]), str(st["lost_races"]), str(peers)]
+                   str(st["accepted"]), str(st["rejected"]), str(st["lost_races"]), str(peers),
+                   f"{st.get('blobs_fetched', 0)}/{st.get('blobs_served', 0)}"]
             first = port not in self.statuses
             self.statuses[port] = st
             if first and port == self.selected_port():

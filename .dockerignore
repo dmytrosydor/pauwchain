@@ -1,0 +1,10 @@
+# Allowlist: the image needs only the node sources, the worker and the testnet config.
+*
+!CMakeLists.txt
+!requirements.txt
+!node/
+!worker/
+!testnet/
+**/__pycache__
+**/*.pyc
+worker/tests/

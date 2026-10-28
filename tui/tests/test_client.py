@@ -25,3 +25,10 @@ def test_describe_verdict_names_miner_and_checks():
 
 def test_short_hash():
     assert short("abcdef0123456789") == "abcdef01"
+
+
+def test_describe_unavailable_is_not_a_rejection():
+    ev = {"type": "unavailable",
+          "data": {"height": 3, "miner": "ab" * 32, "reason": "data unavailable: checkpoint 1234"}}
+    text = describe(ev, {"ab" * 32: "2"})
+    assert "skipped" in text and "node 2" in text and "rejected" not in text

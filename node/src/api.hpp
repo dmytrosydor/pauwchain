@@ -24,7 +24,7 @@ struct ApiHandlers {
   EventBus* events = nullptr;
 };
 
-// Node HTTP API, on 127.0.0.1 only:
+// Node HTTP API, on --api-listen (127.0.0.1 by default; /admin has no authentication):
 //   GET  /status                 node status
 //   GET  /chain?from=H           best chain from height H (default 0)
 //   GET  /block/<hash>           block by hash
@@ -32,13 +32,14 @@ struct ApiHandlers {
 //   POST /admin                  {"mode": "lazy"} / {"mode": "honest"} / {"paused": true}
 class Api {
 public:
-  Api(uint16_t port, ApiHandlers handlers);
+  Api(std::string listen_addr, uint16_t port, ApiHandlers handlers);
   ~Api();
 
   void start();  // separate thread
   void stop();
 
 private:
+  std::string listen_addr_;
   uint16_t port_;
   ApiHandlers h_;
   std::unique_ptr<httplib::Server> server_;

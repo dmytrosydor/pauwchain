@@ -11,7 +11,7 @@ if __package__ in (None, ""):
 from worker.canonical import derive_seed
 from worker.data import load_dataset, val_set
 from worker.model import init_state
-from worker.store import load_state, save_state
+from worker.store import import_file, load_state, save_state
 from worker.train import Cancelled, accuracy, ckpt_root, hash_states, to_micro, train_block
 from worker.verify import verify_a, verify_b
 
@@ -68,7 +68,12 @@ def op_verify_a(task: dict, stop=None) -> dict:
     )
 
 
-OPS = {"genesis": op_genesis, "train": op_train, "verify_b": op_verify_b, "verify_a": op_verify_a}
+def op_import(task: dict, stop=None) -> dict:
+    return {"valid": import_file(task["store_dir"], task["path"], task["hash"])}
+
+
+OPS = {"genesis": op_genesis, "train": op_train, "verify_b": op_verify_b, "verify_a": op_verify_a,
+       "import": op_import}
 
 
 def run_task(task: dict, stop=None) -> dict:

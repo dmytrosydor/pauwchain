@@ -47,6 +47,10 @@ bool read_all(int fd, void* data, size_t len) {
 void tune_socket(int fd) {
   int one = 1;
   setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+  // A peer that stops reading must not block our senders (and the reader threads that answer requests)
+  // forever: after the timeout the write fails and the connection is dropped.
+  timeval tv{10, 0};
+  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 #ifdef SO_NOSIGPIPE
   setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
 #endif
@@ -54,8 +58,9 @@ void tune_socket(int fd) {
 
 }  // namespace
 
-P2P::P2P(uint16_t port, OnConnect on_connect, OnMessage on_message)
-    : port_(port), on_connect_(std::move(on_connect)), on_message_(std::move(on_message)) {}
+P2P::P2P(std::string listen_addr, uint16_t port, OnConnect on_connect, OnMessage on_message)
+    : listen_addr_(std::move(listen_addr)),
+      port_(port), on_connect_(std::move(on_connect)), on_message_(std::move(on_message)) {}
 
 P2P::~P2P() { stop(); }
 
@@ -66,10 +71,18 @@ void P2P::start() {
   setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addrinfo hints{};
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  addrinfo* res = nullptr;
+  if (getaddrinfo(listen_addr_.c_str(), nullptr, &hints, &res) != 0 || !res) {
+    throw std::invalid_argument("cannot resolve listen address " + listen_addr_);
+  }
+  addr.sin_addr = reinterpret_cast<sockaddr_in*>(res->ai_addr)->sin_addr;
+  freeaddrinfo(res);
   addr.sin_port = htons(port_);
   if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-    throw std::runtime_error("bind() failed on port " + std::to_string(port_) + ": " +
+    throw std::runtime_error("bind() failed on " + listen_addr_ + ":" + std::to_string(port_) + ": " +
                              std::strerror(errno));
   }
   if (::listen(listen_fd_, 16) < 0) throw std::runtime_error("listen() failed");
@@ -152,6 +165,10 @@ void P2P::send(int peer, const json& msg) {
     p = it->second;
   }
   std::string payload = msg.dump();
+  if (payload.size() > kMaxFrame) {
+    std::cerr << "p2p: message of " << payload.size() << " bytes exceeds the frame limit, not sent\n";
+    return;
+  }
   uint32_t be_len = htonl(static_cast<uint32_t>(payload.size()));
   std::lock_guard lock(p->send_mu);
   if (!write_all(p->fd, &be_len, 4) || !write_all(p->fd, payload.data(), payload.size())) {
@@ -173,6 +190,13 @@ void P2P::broadcast(const json& msg, int except) {
 size_t P2P::peer_count() const {
   std::lock_guard lock(mu_);
   return peers_.size();
+}
+
+std::vector<int> P2P::peer_ids() const {
+  std::lock_guard lock(mu_);
+  std::vector<int> ids;
+  for (const auto& [id, _] : peers_) ids.push_back(id);
+  return ids;
 }
 
 void P2P::stop() {

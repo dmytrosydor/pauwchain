@@ -23,6 +23,8 @@ namespace pouw {
 struct Config {
   std::string id;
   uint16_t port = 0;
+  std::string listen = "127.0.0.1";      // P2P address; 0.0.0.0 to accept peers from other machines
+  std::string api_listen = "127.0.0.1";  // the API has an unauthenticated /admin, so it stays local by default
   std::vector<std::pair<std::string, uint16_t>> peers;
   std::string store_dir = "store";
   std::string task_path;
@@ -41,6 +43,7 @@ struct Config {
   int a_subset = 2000;
   uint64_t max_height = 0;        // 0 = mine forever
   uint16_t api_port = 0;          // 0 = no HTTP API
+  double blob_timeout_s = 10.0;   // per peer, when fetching a missing checkpoint
 };
 
 Config parse_args(int argc, char** argv);
@@ -67,9 +70,16 @@ private:
   void validator_loop();
   void mining_loop();
 
-  // Full verification: structure + B (+ A). Returns the rejection reason or nullopt.
-  std::optional<std::string> validate(const Block& b, const Block& parent, std::string& detail,
-                                      json& checks);
+  // Full verification: structure + B (+ A). Returns the rejection reason or nullopt. All checkpoints are
+  // fetched from peers before the transitions are picked; if they cannot be fetched, `unavailable` is set.
+  std::optional<std::string> validate(int peer, const Block& b, const Block& parent, std::string& detail,
+                                      json& checks, bool& unavailable);
+  // Makes sure the store has every blob, asking `peer` first and then the others. On failure returns
+  // the hash that could not be fetched.
+  std::optional<Hash> fetch_blobs(int peer, const std::vector<Hash>& hashes);
+  std::string blob_path(const Hash& h) const;
+  void serve_blob(int peer, const json& msg);
+  void receive_blob(int peer, const json& msg);
   json status_locked() const;  // under mu_
   json worker_task(const char* op, const Block& b) const;
   void persist();  // under mu_
@@ -97,6 +107,24 @@ private:
   std::atomic<bool> lazy_mode_{false};  // toggled via the API: the node becomes a lazy attacker
   std::atomic<bool> paused_{false};
   std::map<int, std::string> peer_ids_;  // peer → node_id from hello (under mu_)
+
+  struct BlobReply {
+    bool missing = false;
+    std::string tmp_path;  // received bytes, not yet checked against the hash
+  };
+  struct BlobRequest {
+    int peer;       // only this peer's answer counts
+    uint64_t seq;   // names the temporary file, so a late answer never overwrites a newer one
+    std::optional<BlobReply> reply;
+  };
+  std::mutex blob_mu_;
+  std::condition_variable blob_cv_;
+  std::map<Hash, BlobRequest> blob_wait_;  // outstanding requests (under blob_mu_)
+  uint64_t blob_seq_ = 0;                  // under blob_mu_
+  // Blocks skipped for unavailable data, with the time: a resend within the cooldown is ignored, so a miner
+  // that never serves its checkpoints cannot keep the validator waiting on timeouts. Validator thread only.
+  std::map<Hash, std::chrono::steady_clock::time_point> skipped_;
+  std::atomic<uint64_t> blobs_fetched_{0}, blobs_served_{0};
   std::mt19937_64 rng_{std::random_device{}()};  // private choice of transitions (D5)
   uint64_t mined_ = 0, accepted_ = 0, rejected_count_ = 0, lost_races_ = 0;
 };

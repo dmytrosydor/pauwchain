@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "block.hpp"
 
@@ -18,7 +19,7 @@ public:
   using OnMessage = std::function<void(int peer, const json& msg)>;
   using OnConnect = std::function<void(int peer)>;
 
-  P2P(uint16_t port, OnConnect on_connect, OnMessage on_message);
+  P2P(std::string listen_addr, uint16_t port, OnConnect on_connect, OnMessage on_message);
   ~P2P();
 
   void start();
@@ -26,6 +27,7 @@ public:
   void send(int peer, const json& msg);
   void broadcast(const json& msg, int except = -1);
   size_t peer_count() const;
+  std::vector<int> peer_ids() const;
   void stop();
 
 private:
@@ -39,6 +41,7 @@ private:
   int add_peer(int fd);
   void remove_peer(int id);
 
+  std::string listen_addr_;
   uint16_t port_;
   OnConnect on_connect_;
   OnMessage on_message_;

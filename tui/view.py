@@ -27,6 +27,8 @@ def describe(ev: dict, names: Dict[str, str]) -> str:
         if d.get("lazy"):
             return f"[yellow]submitted a lazy block[/] h={d['height']} (no training)"
         return f"[cyan]mined a block[/] h={d['height']}, accuracy {d['metric_micro'] / 1e4:.2f} %"
+    if t == "unavailable":
+        return f"[yellow]⋯ skipped[/] h={d['height']} from {who(d['miner'], names)}: {d.get('reason', '')}"
     if t == "lost_race":
         return f"[dim]lost the race at h={d['height']}[/]"
     if t == "mining_aborted":

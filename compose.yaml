@@ -1,0 +1,77 @@
+# Local testnet: 3 honest nodes + 1 lazy attacker (node4) on MNIST.
+#   docker compose up -d --build     start (first run downloads MNIST once)
+#   python -m tui                    watch: node APIs are on 127.0.0.1:9201–9204
+#   docker compose down -v           stop and wipe chains, stores and the dataset
+name: pauwchain
+
+x-node: &node
+  image: pauwchain
+  pull_policy: never  # built once by the mnist service below
+  init: true
+  restart: unless-stopped
+  depends_on:
+    mnist:
+      condition: service_completed_successfully
+  # Flags shared by every node; each service adds --id, --peers (and --lazy) in `command`.
+  entrypoint:
+    - node
+    - --port
+    - "9100"
+    - --listen
+    - 0.0.0.0
+    - --api-port
+    - "9200"
+    # The API (/admin is unauthenticated) is reachable from the host only via 127.0.0.1 in `ports`.
+    - --api-listen
+    - 0.0.0.0
+    - --task
+    - /app/testnet/task.json
+    - --store
+    - /app/state/store
+    - --run-dir
+    - /app/state/node
+    - --python
+    - /usr/local/bin/python
+    - --worker-mode
+    - server
+
+services:
+  # One-shot: download MNIST into the shared volume, then exit.
+  mnist:
+    image: pauwchain
+    build: .
+    command: ["python", "-c", "from worker.data import load_dataset; load_dataset('mnist')"]
+    volumes:
+      - mnist:/app/data
+
+  node1:
+    <<: *node
+    command: [--id, "1", --peers, "node2:9100,node3:9100,node4:9100"]
+    ports: ["127.0.0.1:9201:9200"]
+    volumes: [node1:/app/state, mnist:/app/data:ro]
+
+  node2:
+    <<: *node
+    command: [--id, "2", --peers, "node1:9100,node3:9100,node4:9100"]
+    ports: ["127.0.0.1:9202:9200"]
+    volumes: [node2:/app/state, mnist:/app/data:ro]
+
+  node3:
+    <<: *node
+    command: [--id, "3", --peers, "node1:9100,node2:9100,node4:9100"]
+    ports: ["127.0.0.1:9203:9200"]
+    volumes: [node3:/app/state, mnist:/app/data:ro]
+
+  # Attack 1 (lazy replay): the honest nodes must reject its blocks. Toggle it in pouwtop with `l`.
+  node4:
+    <<: *node
+    command: [--id, "4", --peers, "node1:9100,node2:9100,node3:9100", --lazy]
+    ports: ["127.0.0.1:9204:9200"]
+    volumes: [node4:/app/state, mnist:/app/data:ro]
+
+volumes:
+  mnist:
+  node1:
+  node2:
+  node3:
+  node4:

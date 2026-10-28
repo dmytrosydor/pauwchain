@@ -24,3 +24,18 @@ def load_state(store_dir: str, h: str) -> State:
     if canonical_weight_hash(state).hex() != h:
         raise ValueError(f"store object {h} does not match its hash")
     return state
+
+
+def import_file(store_dir: str, path: str, expected: str) -> bool:
+    """Moves a weights file received from a peer into the store if its canonical hash is `expected`.
+    A file that does not load or does not match is deleted."""
+    try:
+        ok = canonical_weight_hash(load_file(path)).hex() == expected
+    except Exception:  # noqa: BLE001 — any malformed file from a peer is simply rejected
+        ok = False
+    if ok:
+        os.makedirs(store_dir, exist_ok=True)
+        os.replace(path, os.path.join(store_dir, f"{expected}.safetensors"))
+    elif os.path.exists(path):
+        os.remove(path)
+    return ok

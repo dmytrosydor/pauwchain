@@ -63,6 +63,33 @@ static void test_hex() {
   CHECK(to_hex(sha256(std::string_view("abc"))).rfind("ba7816bf", 0) == 0);
 }
 
+static void test_base64() {
+  // RFC 4648 test vectors, then a round trip over every byte value and length remainder.
+  const std::pair<std::string, std::string> rfc[] = {
+      {"", ""}, {"f", "Zg=="}, {"fo", "Zm8="}, {"foo", "Zm9v"}, {"foob", "Zm9vYg=="}, {"fooba", "Zm9vYmE="},
+      {"foobar", "Zm9vYmFy"}};
+  for (const auto& [plain, enc] : rfc) {
+    std::vector<uint8_t> bytes(plain.begin(), plain.end());
+    CHECK(to_base64(bytes) == enc);
+    CHECK(from_base64(enc) == bytes);
+  }
+  std::vector<uint8_t> all;
+  for (int i = 0; i < 256; ++i) all.push_back(static_cast<uint8_t>(i));
+  for (size_t n : {size_t{254}, size_t{255}, size_t{256}}) {
+    std::vector<uint8_t> part(all.begin(), all.begin() + static_cast<long>(n));
+    CHECK(from_base64(to_base64(part)) == part);
+  }
+  for (const char* bad : {"Zm9", "Zm9v!A==", "Z=9v"}) {
+    bool threw = false;
+    try {
+      from_base64(bad);
+    } catch (const std::invalid_argument&) {
+      threw = true;
+    }
+    CHECK(threw);
+  }
+}
+
 static void test_golden(const std::string& path) {
   std::ifstream in(path);
   CHECK(static_cast<bool>(in));
@@ -220,6 +247,7 @@ static void test_event_bus() {
 
 int main(int argc, char** argv) {
   test_hex();
+  test_base64();
   test_golden(argc > 1 ? argv[1] : "docs/golden.json");
   test_vectors(argc > 2 ? argv[2] : "docs/vectors.json");
   test_structure();

@@ -10,11 +10,13 @@ int main(int argc, char** argv) {
     node.run();
   } catch (const std::exception& e) {
     std::cerr << "node: " << e.what() << '\n'
-              << "usage: node --id N --port P --task task.json [--peers host:port,...]\n"
+              << "usage: node --id N --port P --task task.json [--peers host:port,...] [--listen ADDR]\n"
+                 "            [--api-listen ADDR]\n"
                  "            [--store DIR] [--run-dir DIR] [--python PATH] [--worker PATH]\n"
                  "            [--worker-mode server|spawn]\n"
                  "            [--device cpu|mps] [--q 2] [--alpha 0.05] [--verify-a]\n"
-                 "            [--lazy] [--lazy-delay SEC] [--max-height H] [--api-port P]\n";
+                 "            [--lazy] [--lazy-delay SEC] [--max-height H] [--api-port P]\n"
+                 "            [--blob-timeout SEC]\n";
     return 1;
   }
   return 0;

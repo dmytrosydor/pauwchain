@@ -50,6 +50,21 @@ HEIGHT=0 scripts/demo.sh          # keep the network running (APIs on ports 9201
 .venv/bin/python -m tui           # ... and watch it in another terminal; press l to turn a node into an attacker
 ```
 
+## Testnet in Docker
+
+Four nodes in containers (`compose.yaml`): node1–3 honest, node4 starts as a lazy attacker. Each node has its
+own chain and weight store in a named volume; MNIST is downloaded once into a shared volume. Inside the
+network the nodes bind with `--listen 0.0.0.0 --api-listen 0.0.0.0`; on the host the APIs are published only on
+`127.0.0.1:9201–9204`.
+
+```sh
+docker compose up -d --build      # build the image, fetch MNIST, start node1–node4
+.venv/bin/python -m tui           # pouwtop on the host; select a node and press l to toggle lazy mode
+docker compose logs -f node1      # MINED / ACCEPT / REJECT lines
+docker compose restart            # chains survive restarts
+docker compose down -v            # stop and wipe chains, stores and the dataset
+```
+
 ## Components
 
 ### Node (C++20) — `node/`

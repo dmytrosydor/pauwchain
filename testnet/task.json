@@ -1,0 +1,1 @@
+{"task_seed": 42, "K": 200, "k": 20, "batch_size": 64, "lr": 0.05, "dataset": "mnist"}

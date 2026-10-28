@@ -62,6 +62,8 @@ Config parse_args(int argc, char** argv) {
     std::string a = argv[i];
     if (a == "--id") c.id = need(i);
     else if (a == "--port") c.port = static_cast<uint16_t>(std::stoi(need(i)));
+    else if (a == "--listen") c.listen = need(i);
+    else if (a == "--api-listen") c.api_listen = need(i);
     else if (a == "--peers") {
       std::stringstream ss(need(i));
       for (std::string p; std::getline(ss, p, ',');) {
@@ -81,6 +83,7 @@ Config parse_args(int argc, char** argv) {
     else if (a == "--verify-a") c.verify_a = true;
     else if (a == "--max-height") c.max_height = std::stoull(need(i));
     else if (a == "--api-port") c.api_port = static_cast<uint16_t>(std::stoi(need(i)));
+    else if (a == "--blob-timeout") c.blob_timeout_s = std::stod(need(i));
     else throw std::invalid_argument("unknown argument: " + a);
   }
   if (c.id.empty() || c.port == 0 || c.task_path.empty()) {
@@ -147,13 +150,16 @@ void Node::run() {
     h.block = [this](const std::string& hex) { return block_json(hex); };
     h.admin = [this](const json& req) { return admin(req); };
     h.events = events_.get();
-    api_ = std::make_unique<Api>(cfg_.api_port, std::move(h));
+    api_ = std::make_unique<Api>(cfg_.api_listen, cfg_.api_port, std::move(h));
     api_->start();
-    log("API on http://127.0.0.1:" + std::to_string(cfg_.api_port));
+    log("API on http://" + cfg_.api_listen + ":" + std::to_string(cfg_.api_port));
   }
 
+  // Leftovers from an interrupted fetch; nothing in here has passed the hash check.
+  std::filesystem::remove_all(cfg_.store_dir + "/incoming");
+  std::filesystem::create_directories(cfg_.store_dir + "/incoming");
   p2p_ = std::make_unique<P2P>(
-      cfg_.port, [this](int peer) { on_connect(peer); },
+      cfg_.listen, cfg_.port, [this](int peer) { on_connect(peer); },
       [this](int peer, const json& msg) { on_message(peer, msg); });
   p2p_->start();
   for (const auto& [host, port] : cfg_.peers) p2p_->connect_to(host, port);
@@ -260,12 +266,10 @@ void Node::mining_loop() {
         events_->publish("lost_race", {{"height", h.height}});
         continue;
       }
-      // The attacker does not add its own blocks locally; it follows the honest chain to stay in the race.
-      if (!lazy) {
-        chain_->add(b);
-        persist();
-      }
       ++mined_;
+      // The attacker does not add its own blocks locally; it follows the honest chain to stay in the race.
+      if (!lazy) chain_->add(b);
+      persist();
     }
     log(std::string(lazy ? "LAZY block" : "MINED") + " h=" + std::to_string(h.height) +
         " hash=" + short_hex(b.hash()) + " acc=" + std::to_string(h.metric_micro / 1e4) + "%");
@@ -319,6 +323,10 @@ void Node::on_message(int peer, const json& msg) {
       }
     }
     p2p_->send(peer, {{"type", "blocks"}, {"blocks", blocks}});
+  } else if (type == "get_blob") {
+    serve_blob(peer, msg);
+  } else if (type == "blob") {
+    receive_blob(peer, msg);
   } else if (type == "block" || type == "blocks") {
     std::vector<Block> got;
     if (type == "block") {
@@ -334,9 +342,108 @@ void Node::on_message(int peer, const json& msg) {
   }
 }
 
-std::optional<std::string> Node::validate(const Block& b, const Block& parent,
-                                          std::string& detail, json& checks) {
+std::string Node::blob_path(const Hash& h) const {
+  return cfg_.store_dir + "/" + to_hex(h) + ".safetensors";
+}
+
+void Node::serve_blob(int peer, const json& msg) {
+  const Hash h = hash_from_hex(msg.at("hash").get<std::string>());
+  json reply = {{"type", "blob"}, {"hash", to_hex(h)}};
+  std::ifstream in(blob_path(h), std::ios::binary);
+  std::vector<uint8_t> bytes;
+  if (in) bytes.assign(std::istreambuf_iterator<char>(in), {});
+  if (bytes.empty()) {
+    reply["missing"] = true;
+  } else {
+    reply["data"] = to_base64(bytes);
+    ++blobs_served_;
+  }
+  p2p_->send(peer, reply);
+}
+
+void Node::receive_blob(int peer, const json& msg) {
+  const Hash h = hash_from_hex(msg.at("hash").get<std::string>());
+  uint64_t seq;
+  {
+    std::lock_guard lock(blob_mu_);
+    auto it = blob_wait_.find(h);
+    // Not requested, asked from another peer, or already answered.
+    if (it == blob_wait_.end() || it->second.peer != peer || it->second.reply) return;
+    seq = it->second.seq;
+  }
+  BlobReply reply;
+  reply.missing = true;  // also for a malformed answer: the validator moves on to the next peer at once
+  if (!msg.value("missing", false) && msg.contains("data") && msg.at("data").is_string()) {
+    try {
+      auto bytes = from_base64(msg.at("data").get<std::string>());
+      reply.tmp_path = cfg_.store_dir + "/incoming/" + to_hex(h) + "." + std::to_string(seq) + ".tmp";
+      std::ofstream(reply.tmp_path, std::ios::binary)
+          .write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+      reply.missing = false;
+    } catch (const std::invalid_argument&) {
+    }
+  }
+  std::lock_guard lock(blob_mu_);
+  auto it = blob_wait_.find(h);
+  if (it == blob_wait_.end() || it->second.seq != seq || it->second.reply) {
+    if (!reply.tmp_path.empty()) std::filesystem::remove(reply.tmp_path);  // the request timed out meanwhile
+    return;
+  }
+  it->second.reply = std::move(reply);
+  blob_cv_.notify_all();
+}
+
+std::optional<Hash> Node::fetch_blobs(int peer, const std::vector<Hash>& hashes) {
+  for (const Hash& h : hashes) {
+    if (std::filesystem::exists(blob_path(h))) continue;
+    // The sender first, if still connected, then everyone else.
+    std::vector<int> order, connected = p2p_->peer_ids();
+    if (std::find(connected.begin(), connected.end(), peer) != connected.end()) order.push_back(peer);
+    for (int p : connected) {
+      if (p != peer) order.push_back(p);
+    }
+    bool got = false;
+    for (int from : order) {
+      {
+        std::lock_guard lock(blob_mu_);
+        blob_wait_[h] = {from, ++blob_seq_, std::nullopt};
+      }
+      p2p_->send(from, {{"type", "get_blob"}, {"hash", to_hex(h)}});
+      std::optional<BlobReply> reply;
+      {
+        std::unique_lock lock(blob_mu_);
+        blob_cv_.wait_for(lock, std::chrono::duration<double>(cfg_.blob_timeout_s),
+                          [&] { return blob_wait_[h].reply.has_value(); });
+        reply = std::move(blob_wait_[h].reply);
+        blob_wait_.erase(h);
+      }
+      if (!reply || reply->missing) continue;
+      // The worker checks the canonical hash before the file enters the store; a bad copy is deleted.
+      auto res = verifier_bridge_->run(
+          {{"op", "import"}, {"store_dir", cfg_.store_dir}, {"path", reply->tmp_path}, {"hash", to_hex(h)}});
+      if (res && res->value("ok", false) && res->value("valid", false)) {
+        ++blobs_fetched_;
+        got = true;
+        break;
+      }
+      log("blob " + short_hex(h) + " from peer " + std::to_string(from) + " does not match its hash");
+    }
+    if (!got) return h;
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> Node::validate(int peer, const Block& b, const Block& parent,
+                                          std::string& detail, json& checks, bool& unavailable) {
   if (auto err = check_structure(b, parent, task_)) return "structure: " + *err;
+
+  // Every checkpoint is fetched before any transition is picked. Asking only for the picked ones would tell
+  // the miner the private choice (D5): it could withhold the data of a bad transition and resend the block
+  // (with a new timestamp, so a new hash) until a draw misses it.
+  if (auto missing = fetch_blobs(peer, b.ckpt_hashes)) {
+    unavailable = true;
+    return "data unavailable: checkpoint " + short_hex(*missing);
+  }
 
   // Mechanism B: q transitions chosen by the validator's private RNG.
   const size_t m = b.header.K / b.header.k;
@@ -400,6 +507,10 @@ void Node::validator_loop() {
       inbox_.pop_front();
       h = in.block.hash();
       if (chain_->contains(h) || rejected_.count(h)) continue;
+      if (auto it = skipped_.find(h); it != skipped_.end()) {
+        if (Clock::now() - it->second < std::chrono::seconds(30)) continue;
+        skipped_.erase(it);
+      }
       const Hash& prev = in.block.header.prev_hash;
       if (rejected_.count(prev)) {
         rejected_.insert(h);
@@ -425,7 +536,8 @@ void Node::validator_loop() {
     std::string detail;
     json checks = json::array();
     auto t0 = Clock::now();
-    auto reason = validate(in.block, parent, detail, checks);
+    bool unavailable = false;
+    auto reason = validate(in.peer, in.block, parent, detail, checks, unavailable);
     double secs = std::chrono::duration<double>(Clock::now() - t0).count();
 
     std::string what = "h=" + std::to_string(in.block.header.height) + " hash=" + short_hex(h) +
@@ -433,6 +545,17 @@ void Node::validator_loop() {
     {
       std::lock_guard lock(mu_);
       validating_ = false;
+      if (unavailable) {
+        // Not a verdict: the block may be fine, and a resend or sync after the cooldown will retry it.
+        if (skipped_.size() >= 1024) {
+          std::erase_if(skipped_, [](const auto& e) { return Clock::now() - e.second > std::chrono::seconds(30); });
+        }
+        if (skipped_.size() < 1024) skipped_[h] = Clock::now();
+        log("SKIP " + what + ": " + *reason);
+        events_->publish("unavailable", {{"height", in.block.header.height}, {"hash", to_hex(h)},
+                                         {"miner", to_hex(in.block.header.miner_id)}, {"reason", *reason}});
+        continue;
+      }
       json verdict = {{"height", in.block.header.height}, {"hash", to_hex(h)},
                       {"miner", to_hex(in.block.header.miner_id)}, {"accepted", !reason},
                       {"reason", reason ? *reason : ""}, {"checks", checks}, {"seconds", secs},
@@ -488,6 +611,8 @@ json Node::status_locked() const {
       {"accepted", accepted_},
       {"rejected", rejected_count_},
       {"lost_races", lost_races_},
+      {"blobs_fetched", blobs_fetched_.load()},
+      {"blobs_served", blobs_served_.load()},
       {"device", cfg_.device},
       {"q", cfg_.q},
       {"alpha", cfg_.alpha},
