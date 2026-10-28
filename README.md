@@ -47,7 +47,7 @@ cmake -S . -B build && cmake --build build -j
 
 scripts/demo.sh                   # 3 honest nodes + 1 lazy attacker on MNIST, up to height 5
 HEIGHT=0 scripts/demo.sh          # keep the network running (APIs on ports 9201–9204) ...
-.venv/bin/python -m tui           # ... and watch it in another terminal; press l to turn a node into an attacker
+.venv/bin/python -m tui           # ... and watch it in another terminal; press c to make a node cheat
 ```
 
 ## Testnet in Docker
@@ -59,7 +59,7 @@ network the nodes bind with `--listen 0.0.0.0 --api-listen 0.0.0.0`; on the host
 
 ```sh
 docker compose up -d --build      # build the image, fetch MNIST, start node1–node4
-.venv/bin/python -m tui           # pouwtop on the host; select a node and press l to toggle lazy mode
+.venv/bin/python -m tui           # pouwtop on the host; select a node and press c to make it cheat
 docker compose logs -f node1      # MINED / ACCEPT / REJECT lines
 docker compose restart            # chains survive restarts
 docker compose down -v            # stop and wipe chains, stores and the dataset
@@ -92,8 +92,10 @@ With `--api-port P` the node serves a local HTTP API on `127.0.0.1:P`:
 
 ### pouwtop — `tui/`
 
-An htop-style terminal monitor (Textual) on top of the API: nodes, the selected node's chain, model accuracy per
-block and a live verification log. Keys: ↑/↓ select a node, `l` lazy mode, `p` pause, `q` quit.
+A terminal monitor (Textual) on top of the API that explains itself: a headline (is the network healthy, how
+accurate the shared model is, how many fake blocks were caught), a card per node (honest or cheating, what it is
+doing), the accuracy chart, the chain, and a plain-language feed with each block reported once. Keys: ←/→ choose a
+node, `c` make it cheat or honest again, `p` pause it, `?` what the screen shows, `q` quit.
 
 ### Worker (Python/PyTorch) — `worker/`
 
